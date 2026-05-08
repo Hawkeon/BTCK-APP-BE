@@ -224,7 +224,7 @@ class BudgetsPublic(SQLModel):
 class ExpenseBase(SQLModel):
     title: str = Field(min_length=1, max_length=255)
     amount: float = Field(gt=0)
-    date: date = Field(default_factory=date.today)
+    expense_date: date = Field(default_factory=date.today, validation_alias="date")
     notes: str | None = Field(default=None, max_length=500)
 
 
@@ -235,7 +235,7 @@ class ExpenseCreate(ExpenseBase):
 class ExpenseUpdate(SQLModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     amount: float | None = Field(default=None, gt=0)
-    date: date | None = None
+    expense_date: date | None = Field(default=None, validation_alias="date")
     notes: str | None = Field(default=None, max_length=500)
     category_id: uuid.UUID | None = None
 

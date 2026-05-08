@@ -21,9 +21,7 @@ services:
       - "5432:5432"
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: localhost/expense-tracker-backend:latest
     restart: always
     depends_on:
       db:
@@ -47,3 +45,9 @@ services:
 
 volumes:
   app-db-data:
+
+networks:
+  default:
+    driver: bridge
+  traefik-public:
+    driver: bridge

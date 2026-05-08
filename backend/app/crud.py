@@ -151,7 +151,7 @@ def get_budget_spending(*, session: Session, budget_id: uuid.UUID, owner_id: uui
     statement = select(Expense).where(
         Expense.category_id == budget.category_id,
         Expense.owner_id == owner_id,
-        Expense.date >= period_start
+        Expense.expense_date >= period_start
     )
     expenses = session.exec(statement).all()
     return sum(exp.amount for exp in expenses)
@@ -173,10 +173,10 @@ def get_expenses(*, session: Session, owner_id: uuid.UUID, skip: int = 0, limit:
     if category_id:
         statement = statement.where(Expense.category_id == category_id)
     if date_from:
-        statement = statement.where(Expense.date >= date_from)
+        statement = statement.where(Expense.expense_date >= date_from)
     if date_to:
-        statement = statement.where(Expense.date <= date_to)
-    statement = statement.offset(skip).limit(limit).order_by(Expense.date.desc())
+        statement = statement.where(Expense.expense_date <= date_to)
+    statement = statement.offset(skip).limit(limit).order_by(Expense.expense_date.desc())
     return session.exec(statement).all()
 
 
