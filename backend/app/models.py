@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
 from sqlalchemy import DateTime
@@ -54,6 +54,9 @@ class User(UserBase, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore
     )
     items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    categories: list["Category"] = Relationship(back_populates="owner", cascade_delete=True)
+    budgets: list["Budget"] = Relationship(back_populates="owner", cascade_delete=True)
+    expenses: list["Expense"] = Relationship(back_populates="owner", cascade_delete=True)
 
 
 # Properties to return via API, id is always required
@@ -127,3 +130,139 @@ class TokenPayload(SQLModel):
 class NewPassword(SQLModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+# ============ Category Models ============
+
+class CategoryBase(SQLModel):
+    name: str = Field(min_length=1, max_length=100)
+    icon: str | None = Field(default=None, max_length=50)
+    color: str | None = Field(default=None, max_length=7)  # hex color
+
+
+class CategoryCreate(CategoryBase):
+    pass
+
+
+class CategoryUpdate(SQLModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    icon: str | None = Field(default=None, max_length=50)
+    color: str | None = Field(default=None, max_length=7)
+
+
+class Category(CategoryBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    owner: User | None = Relationship(back_populates="categories")
+    budgets: list["Budget"] = Relationship(back_populates="category", cascade_delete=True)
+    expenses: list["Expense"] = Relationship(back_populates="category", cascade_delete=True)
+
+
+class CategoryPublic(CategoryBase):
+    id: uuid.UUID
+    created_at: datetime | None = None
+
+
+# ============ Budget Models ============
+
+class BudgetBase(SQLModel):
+    name: str = Field(min_length=1, max_length=100)
+    amount: float = Field(gt=0)
+    period: str = Field(max_length=20)  # monthly, weekly, yearly
+    start_date: date = Field(default_factory=date.today)
+
+
+class BudgetCreate(BudgetBase):
+    category_id: uuid.UUID
+
+
+class BudgetUpdate(SQLModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    amount: float | None = Field(default=None, gt=0)
+    period: str | None = Field(default=None, max_length=20)
+    start_date: date | None = None
+    category_id: uuid.UUID | None = None
+
+
+class Budget(BudgetBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    owner: User | None = Relationship(back_populates="budgets")
+    category_id: uuid.UUID = Field(
+        foreign_key="category.id", nullable=False, ondelete="CASCADE"
+    )
+    category: Category | None = Relationship(back_populates="budgets")
+
+
+class BudgetPublic(BudgetBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+    category_id: uuid.UUID
+    created_at: datetime | None = None
+    spent: float = 0  # calculated field, not in DB
+
+
+class BudgetsPublic(SQLModel):
+    data: list[BudgetPublic]
+    count: int
+
+
+# ============ Expense Models ============
+
+class ExpenseBase(SQLModel):
+    title: str = Field(min_length=1, max_length=255)
+    amount: float = Field(gt=0)
+    date: date = Field(default_factory=date.today)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class ExpenseCreate(ExpenseBase):
+    category_id: uuid.UUID
+
+
+class ExpenseUpdate(SQLModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    amount: float | None = Field(default=None, gt=0)
+    date: date | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    category_id: uuid.UUID | None = None
+
+
+class Expense(ExpenseBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    owner: User | None = Relationship(back_populates="expenses")
+    category_id: uuid.UUID = Field(
+        foreign_key="category.id", nullable=False, ondelete="CASCADE"
+    )
+    category: Category | None = Relationship(back_populates="expenses")
+
+
+class ExpensePublic(ExpenseBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+    category_id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class ExpensesPublic(SQLModel):
+    data: list[ExpensePublic]
+    count: int
