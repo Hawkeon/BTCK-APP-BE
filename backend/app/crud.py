@@ -23,6 +23,8 @@ from app.models import (
     ExpenseUpdate,
     MyBalanceDetail,
     MyBalanceSummary,
+    Settlement,
+    SettlementCreate,
     User,
     UserBalance,
     UserCreate,
@@ -327,3 +329,109 @@ def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyB
     )
 
     return MyBalanceDetail(events=event_balances, summary=summary)
+
+
+# ============ Settlement CRUD ============
+
+def create_settlement(
+    *, session: Session, settlement_in: SettlementCreate, event_id: uuid.UUID, from_user_id: uuid.UUID
+) -> Settlement:
+    """Record a settlement payment from one user to another within an event."""
+    db_obj = Settlement(
+        event_id=event_id,
+        from_user_id=from_user_id,
+        to_user_id=settlement_in.to_user_id,
+        amount=settlement_in.amount,
+        note=settlement_in.note,
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def get_settlements(
+    *, session: Session, event_id: uuid.UUID, skip: int = 0, limit: int = 100
+) -> list[Settlement]:
+    statement = (
+        select(Settlement)
+        .where(Settlement.event_id == event_id)
+        .offset(skip)
+        .limit(limit)
+        .order_by(Settlement.settled_at.desc())
+    )
+    return session.exec(statement).all()
+
+
+def get_settlement(*, session: Session, settlement_id: uuid.UUID, event_id: uuid.UUID) -> Settlement | None:
+    statement = select(Settlement).where(
+        Settlement.id == settlement_id, Settlement.event_id == event_id
+    )
+    return session.exec(statement).first()
+
+
+def delete_settlement(*, session: Session, db_obj: Settlement) -> None:
+    session.delete(db_obj)
+    session.commit()
+
+
+def get_settlements_for_user_in_event(
+    *, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[list[Settlement], list[Settlement]]:
+    """Get all settlements where user is involved as payer or payee.
+    Returns (settlements_made, settlements_received).
+    """
+    all_settlements = get_settlements(session=session, event_id=event_id)
+    made = [s for s in all_settlements if s.from_user_id == user_id]
+    received = [s for s in all_settlements if s.to_user_id == user_id]
+    return made, received
+
+
+def calculate_event_balances_with_settlements(*, session: Session, event_id: uuid.UUID) -> EventBalances:
+    """Calculate balances factoring in settlements."""
+    event = session.get(Event, event_id)
+    members = get_event_members(session=session, event_id=event_id)
+    member_ids = [m.user_id for m in members]
+    users = {u.id: u for u in session.exec(select(User).where(User.id.in_(member_ids))).all()}
+
+    expenses = get_expenses(session=session, event_id=event_id)
+    settlements = get_settlements(session=session, event_id=event_id)
+
+    paid = {uid: 0.0 for uid in member_ids}
+    owed = {uid: 0.0 for uid in member_ids}
+    settled_from = {uid: 0.0 for uid in member_ids}  # amounts user paid to settle
+    settled_to = {uid: 0.0 for uid in member_ids}  # amounts user received from settlement
+
+    for exp in expenses:
+        paid[exp.payer_id] = paid.get(exp.payer_id, 0.0) + exp.amount
+        for split in exp.splits:
+            if not split.is_excluded:
+                owed[split.user_id] = owed.get(split.user_id, 0.0) + split.amount_owed
+
+    for s in settlements:
+        settled_from[s.from_user_id] = settled_from.get(s.from_user_id, 0.0) + s.amount
+        settled_to[s.to_user_id] = settled_to.get(s.to_user_id, 0.0) + s.amount
+
+    balances = []
+    for uid in member_ids:
+        user = users.get(uid)
+        if user:
+            net_before_settlements = paid.get(uid, 0.0) - owed.get(uid, 0.0)
+            # Settlements transfer money: received increases your balance, paid decreases it
+            net_from_settlements = settled_to.get(uid, 0.0) - settled_from.get(uid, 0.0)
+            net_balance = net_before_settlements + net_from_settlements
+
+            balances.append(UserBalance(
+                user_id=uid,
+                user_email=user.email,
+                user_full_name=user.full_name,
+                total_paid=round(paid.get(uid, 0.0), 2),
+                total_owed=round(owed.get(uid, 0.0), 2),
+                net_balance=round(net_balance, 2)
+            ))
+
+    return EventBalances(
+        event_id=event_id,
+        event_name=event.name if event else "Unknown",
+        balances=balances
+    )

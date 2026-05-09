@@ -94,6 +94,7 @@ class Event(EventBase, table=True):
     owner: Optional["User"] = Relationship(back_populates="owned_events")
     members: list["EventMember"] = Relationship(back_populates="event", cascade_delete=True)
     expenses: list["Expense"] = Relationship(back_populates="event", cascade_delete=True)
+    settlements: list["Settlement"] = Relationship(back_populates="event", cascade_delete=True)
 
 
 class EventPublic(EventBase):
@@ -282,3 +283,54 @@ class TokenPayload(SQLModel):
 class NewPassword(SQLModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+# ============ Settlement Models ============
+
+class SettlementBase(SQLModel):
+    amount: float = Field(gt=0)
+
+
+class SettlementCreate(SettlementBase):
+    to_user_id: uuid.UUID  # who receives the payment
+    note: str | None = Field(default=None, max_length=255)
+
+
+class Settlement(SettlementBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    event_id: uuid.UUID = Field(
+        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+    )
+    from_user_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    to_user_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    amount: float = Field(gt=0)
+    note: str | None = Field(default=None, max_length=255)
+    settled_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+    event: Optional["Event"] = Relationship(back_populates="settlements")
+    from_user: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Settlement.from_user_id]"})
+    to_user: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Settlement.to_user_id]"})
+
+
+class SettlementPublic(SettlementBase):
+    id: uuid.UUID
+    event_id: uuid.UUID
+    from_user_id: uuid.UUID
+    to_user_id: uuid.UUID
+    note: str | None = None
+    settled_at: datetime | None = None
+    from_user_email: str | None = None
+    from_user_full_name: str | None = None
+    to_user_email: str | None = None
+    to_user_full_name: str | None = None
+
+
+class SettlementsPublic(SQLModel):
+    data: list[SettlementPublic]
+    count: int
