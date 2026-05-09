@@ -9,7 +9,17 @@ from app import crud
 from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.core import security
 from app.core.config import settings
-from app.models import Message, NewPassword, Token, UserPublic, UserUpdate
+from app.models import (
+    Message,
+    NewPassword,
+    RefreshTokenRequest,
+    Token,
+    User,
+    UserCreate,
+    UserPublic,
+    UserRegister,
+    UserUpdate,
+)
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
@@ -17,15 +27,31 @@ from app.utils import (
     verify_password_reset_token,
 )
 
-router = APIRouter(tags=["login"])
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login/access-token")
-def login_access_token(
+@router.post("/register", response_model=UserPublic)
+def register_user(session: SessionDep, user_in: UserRegister) -> Any:
+    """
+    Register a new user.
+    """
+    user = crud.get_user_by_email(session=session, email=user_in.email)
+    if user:
+        raise HTTPException(
+            status_code=400,
+            detail="The user with this email already exists in the system",
+        )
+    user_create = UserCreate.model_validate(user_in)
+    user = crud.create_user(session=session, user_create=user_create)
+    return user
+
+
+@router.post("/login", response_model=Token)
+def login(
     session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Token:
     """
-    OAuth2 compatible token login, get an access token for future requests
+    OAuth2 compatible token login, get an access token and refresh token for future requests
     """
     user = crud.authenticate(
         session=session, email=form_data.username, password=form_data.password
@@ -35,14 +61,59 @@ def login_access_token(
     elif not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
     return Token(
         access_token=security.create_access_token(
             user.id, expires_delta=access_token_expires
-        )
+        ),
+        refresh_token=security.create_refresh_token(
+            user.id, expires_delta=refresh_token_expires
+        ),
     )
 
 
-@router.post("/login/test-token", response_model=UserPublic)
+@router.post("/refresh", response_model=Token)
+def refresh_token(session: SessionDep, body: RefreshTokenRequest) -> Token:
+    """
+    Refresh access token using a valid refresh token
+    """
+    user_id = security.verify_refresh_token(body.refresh_token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    return Token(
+        access_token=security.create_access_token(
+            user.id, expires_delta=access_token_expires
+        ),
+        refresh_token=security.create_refresh_token(
+            user.id, expires_delta=refresh_token_expires
+        ),
+    )
+
+
+@router.post("/logout")
+def logout(current_user: CurrentUser) -> Message:
+    """
+    Logout current user (client should discard tokens)
+    """
+    return Message(message="Successfully logged out")
+
+
+@router.get("/me", response_model=UserPublic)
+def get_current_user_info(current_user: CurrentUser) -> UserPublic:
+    """
+    Get current user info
+    """
+    return UserPublic.model_validate(current_user)
+
+
+@router.get("/test-token", response_model=UserPublic)
 def test_token(current_user: CurrentUser) -> Any:
     """
     Test access token

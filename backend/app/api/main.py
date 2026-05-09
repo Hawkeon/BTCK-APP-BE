@@ -1,17 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.routes import budgets, categories, expenses, items, login, private, users, utils
-from app.core.config import settings
+from app.api.routes import events, expenses, login, users, utils
 
 api_router = APIRouter()
 api_router.include_router(login.router)
 api_router.include_router(users.router)
 api_router.include_router(utils.router)
-api_router.include_router(items.router)
-api_router.include_router(categories.router)
-api_router.include_router(budgets.router)
+api_router.include_router(events.router)
 api_router.include_router(expenses.router)
-
-
-if settings.ENVIRONMENT == "local":
-    api_router.include_router(private.router)
