@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import EmailStr
@@ -18,6 +18,7 @@ class UserBase(SQLModel):
     is_active: bool = True
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
+    qr_code_url: str | None = Field(default=None, max_length=500, nullable=True)
 
 
 class UserCreate(UserBase):
@@ -52,8 +53,16 @@ class User(UserBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    owned_events: list["Event"] = Relationship(back_populates="owner", cascade_delete=True)
+    created_events: list["Event"] = Relationship(
+        back_populates="creator",
+        cascade_delete=True,
+        sa_relationship_kwargs={"foreign_keys": "[Event.created_by_id]"}
+    )
     memberships: list["EventMember"] = Relationship(back_populates="user", cascade_delete=True)
+    expense_splits: list["ExpenseSplit"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={"foreign_keys": "[ExpenseSplit.user_id]"}
+    )
 
 
 class UserPublic(UserBase):
@@ -88,10 +97,13 @@ class Event(EventBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    owner_id: uuid.UUID = Field(
+    created_by_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    owner: Optional["User"] = Relationship(back_populates="owned_events")
+    creator: Optional["User"] = Relationship(
+        back_populates="created_events",
+        sa_relationship_kwargs={"foreign_keys": "[Event.created_by_id]"}
+    )
     members: list["EventMember"] = Relationship(back_populates="event", cascade_delete=True)
     expenses: list["Expense"] = Relationship(back_populates="event", cascade_delete=True)
     settlements: list["Settlement"] = Relationship(back_populates="event", cascade_delete=True)
@@ -99,7 +111,7 @@ class Event(EventBase, table=True):
 
 class EventPublic(EventBase):
     id: uuid.UUID
-    owner_id: uuid.UUID
+    created_by_id: uuid.UUID
     created_at: datetime | None = None
     member_count: int = 0
     expense_count: int = 0
@@ -113,12 +125,13 @@ class EventsPublic(SQLModel):
 # ============ Event Member Models ============
 
 class EventMember(SQLModel, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    __table_args__ = ({"schema": "public"})  # Ensure composite PK works properly
+
     event_id: uuid.UUID = Field(
-        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+        foreign_key="event.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     joined_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -129,15 +142,16 @@ class EventMember(SQLModel, table=True):
 
 
 class EventMemberPublic(SQLModel):
-    id: uuid.UUID
+    event_id: uuid.UUID
     user_id: uuid.UUID
     joined_at: datetime | None = None
     user_email: str | None = None
     user_full_name: str | None = None
+    user_qr_code_url: str | None = None
 
 
-class AddMemberRequest(SQLModel):
-    user_id: uuid.UUID
+class AddMemberByEmailRequest(SQLModel):
+    email: EmailStr
 
 
 # ============ Expense Models ============
@@ -145,32 +159,23 @@ class AddMemberRequest(SQLModel):
 class ExpenseBase(SQLModel):
     description: str = Field(min_length=1, max_length=255)
     amount: float = Field(gt=0)
-    expense_date: date = Field(default_factory=date.today)
-    category: str | None = Field(default=None, max_length=50)  # food, transport, rent, utilities, other
 
 
 class ExpenseCreate(SQLModel):
     description: str = Field(min_length=1, max_length=255)
     amount: float = Field(gt=0)
-    expense_date: date = Field(default_factory=date.today)
-    category: str | None = Field(default=None, max_length=50)
-    split_type: str = Field(default="equal", max_length=20)  # "equal" or "custom"
-    # For equal split: which user_ids to include (all members if empty)
-    include_user_ids: list[uuid.UUID] = []
-    # For custom split: exact amounts per user
-    splits: list["CustomSplit"] = []
+    payer_id: uuid.UUID
+    splits: list["ExpenseSplitCreate"] = Field(min_length=1)
 
 
-class CustomSplit(SQLModel):
+class ExpenseSplitCreate(SQLModel):
     user_id: uuid.UUID
-    amount: float = Field(gt=0)
+    amount_owed: float = Field(gt=0)
 
 
 class ExpenseUpdate(SQLModel):
     description: str | None = Field(default=None, min_length=1, max_length=255)
     amount: float | None = Field(default=None, gt=0)
-    expense_date: date | None = None
-    category: str | None = Field(default=None, max_length=50)
 
 
 class Expense(ExpenseBase, table=True):
@@ -179,50 +184,52 @@ class Expense(ExpenseBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
+    created_by_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
     event_id: uuid.UUID = Field(
         foreign_key="event.id", nullable=False, ondelete="CASCADE"
     )
     payer_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    split_type: str = Field(default="equal", max_length=20)
     event: Optional["Event"] = Relationship(back_populates="expenses")
-    payer: Optional["User"] = Relationship()
+    creator: Optional["User"] = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "[Expense.created_by_id]"}
+    )
+    payer: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Expense.payer_id]"})
     splits: list["ExpenseSplit"] = Relationship(back_populates="expense", cascade_delete=True)
-
-
-class ExpenseSplit(SQLModel, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    expense_id: uuid.UUID = Field(
-        foreign_key="expense.id", nullable=False, ondelete="CASCADE"
-    )
-    user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
-    )
-    amount_owed: float = Field(gt=0)
-    is_excluded: bool = Field(default=False)  # True = not part of this expense
-    expense: Optional["Expense"] = Relationship(back_populates="splits")
-    user: Optional["User"] = Relationship()
 
 
 class ExpensePublic(ExpenseBase):
     id: uuid.UUID
     event_id: uuid.UUID
+    created_by_id: uuid.UUID
     payer_id: uuid.UUID
-    split_type: str
     created_at: datetime | None = None
     payer_email: str | None = None
     payer_full_name: str | None = None
     splits: list["ExpenseSplitPublic"] = []
 
 
+class ExpenseSplit(SQLModel, table=True):
+    expense_id: uuid.UUID = Field(
+        foreign_key="expense.id", nullable=False, ondelete="CASCADE", primary_key=True
+    )
+    user_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", primary_key=True
+    )
+    amount_owed: float = Field(gt=0)
+    expense: Optional["Expense"] = Relationship(back_populates="splits")
+    user: Optional["User"] = Relationship(back_populates="expense_splits")
+
+
 class ExpenseSplitPublic(SQLModel):
-    id: uuid.UUID
     user_id: uuid.UUID
     amount_owed: float
-    is_excluded: bool
     user_email: str | None = None
     user_full_name: str | None = None
+    user_qr_code_url: str | None = None
 
 
 class ExpensesPublic(SQLModel):
@@ -236,6 +243,7 @@ class UserBalance(SQLModel):
     user_id: uuid.UUID
     user_email: str
     user_full_name: str | None
+    user_qr_code_url: str | None = None
     total_paid: float
     total_owed: float
     net_balance: float  # positive = others owe user, negative = user owes
@@ -291,8 +299,10 @@ class SettlementBase(SQLModel):
     amount: float = Field(gt=0)
 
 
-class SettlementCreate(SettlementBase):
-    to_user_id: uuid.UUID  # who receives the payment
+class SettlementCreate(SQLModel):
+    from_user_id: uuid.UUID
+    to_user_id: uuid.UUID
+    amount: float = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
 
 
@@ -309,7 +319,7 @@ class Settlement(SettlementBase, table=True):
     )
     amount: float = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
-    settled_at: datetime | None = Field(
+    created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
@@ -324,13 +334,77 @@ class SettlementPublic(SettlementBase):
     from_user_id: uuid.UUID
     to_user_id: uuid.UUID
     note: str | None = None
-    settled_at: datetime | None = None
+    created_at: datetime | None = None
     from_user_email: str | None = None
     from_user_full_name: str | None = None
+    from_user_qr_code_url: str | None = None
     to_user_email: str | None = None
     to_user_full_name: str | None = None
+    to_user_qr_code_url: str | None = None
 
 
 class SettlementsPublic(SQLModel):
     data: list[SettlementPublic]
     count: int
+
+
+# ============ Invite Models ============
+
+class InviteCode(SQLModel, table=True):
+    __tablename__ = "invite_code"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    event_id: uuid.UUID = Field(foreign_key="event.id", nullable=False, ondelete="CASCADE")
+    code: str = Field(unique=True, index=True, max_length=20)
+    created_by_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    expires_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    max_uses: int | None = Field(default=None)
+    use_count: int = Field(default=0)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+    event: Optional["Event"] = Relationship()
+    creator: Optional["User"] = Relationship()
+
+
+class InviteCodeCreate(SQLModel):
+    expires_in_hours: int | None = Field(default=None, ge=1, le=720)  # Max 30 days
+    max_uses: int | None = Field(default=None, ge=1, le=100)
+
+
+class InviteCodePublic(SQLModel):
+    code: str
+    expires_at: datetime | None = None
+    invite_url: str
+    created_at: datetime | None = None
+
+
+# ============ Simplify Debts Models ============
+
+class SimplifiedDebt(SQLModel):
+    from_user_id: uuid.UUID
+    from_user_email: str
+    from_user_full_name: str | None
+    to_user_id: uuid.UUID
+    to_user_email: str
+    to_user_full: str | None
+    to_user_qr_code_url: str | None
+    amount: float
+
+
+class SimplifiedDebtsResponse(SQLModel):
+    event_id: uuid.UUID
+    debts: list[SimplifiedDebt]
+
+
+# ============ Event Stats Models ============
+
+class EventStats(SQLModel):
+    event_id: uuid.UUID
+    total_spent: float
+    expense_count: int
+    member_count: int
+    your_total_paid: float
+    your_total_owed: float
+    your_net_balance: float

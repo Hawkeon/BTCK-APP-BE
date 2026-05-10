@@ -26,11 +26,13 @@ def settlement_to_public(settlement: Settlement, session) -> SettlementPublic:
         to_user_id=settlement.to_user_id,
         amount=settlement.amount,
         note=settlement.note,
-        settled_at=settlement.settled_at,
+        created_at=settlement.created_at,
         from_user_email=from_user.email if from_user else None,
         from_user_full_name=from_user.full_name if from_user else None,
+        from_user_qr_code_url=from_user.qr_code_url if from_user else None,
         to_user_email=to_user.email if to_user else None,
         to_user_full_name=to_user.full_name if to_user else None,
+        to_user_qr_code_url=to_user.qr_code_url if to_user else None,
     )
 
 
@@ -63,20 +65,25 @@ def create_settlement(
 ) -> SettlementPublic:
     check_event_access(event_id, session, current_user)
 
+    # Validate from_user is current user (person making the settlement)
+    if settlement_in.from_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="from_user_id must be current user")
+
     # Cannot settle with yourself
-    if settlement_in.to_user_id == current_user.id:
+    if settlement_in.to_user_id == settlement_in.from_user_id:
         raise HTTPException(status_code=400, detail="Cannot settle with yourself")
 
-    # Verify target user is event member
-    member_ids = crud.get_event_member_ids(session=session, event_id=event_id)
+    # Verify both users are event members
+    member_ids = set(crud.get_event_member_ids(session=session, event_id=event_id))
+    if settlement_in.from_user_id not in member_ids:
+        raise HTTPException(status_code=400, detail="from_user_id must be an event member")
     if settlement_in.to_user_id not in member_ids:
-        raise HTTPException(status_code=400, detail="Recipient must be an event member")
+        raise HTTPException(status_code=400, detail="to_user_id must be an event member")
 
     settlement = crud.create_settlement(
         session=session,
         settlement_in=settlement_in,
         event_id=event_id,
-        from_user_id=current_user.id,
     )
     return settlement_to_public(settlement, session)
 
@@ -106,7 +113,6 @@ def delete_settlement(
     settlement = crud.get_settlement(session=session, settlement_id=settlement_id, event_id=event_id)
     if not settlement:
         raise HTTPException(status_code=404, detail="Settlement not found")
-    # Only the person who made the settlement can delete it
     if settlement.from_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the payer can delete this settlement")
     crud.delete_settlement(session=session, db_obj=settlement)
