@@ -24,6 +24,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: localhost/expense-tracker-backend:latest
     restart: always
     depends_on:
       db:
@@ -37,13 +38,30 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - ENVIRONMENT=${ENVIRONMENT:-local}
+    command: >
+      bash -c "python app/backend_pre_start.py &&
+               alembic upgrade head &&
+               python app/initial_data.py &&
+               fastapi run --workers 4 app/main.py"
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8000/api/v1/utils/health-check/",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
 
 volumes:
   app-db-data:
+
+networks:
+  default:
+    driver: bridge
+  traefik-public:
+    driver: bridge

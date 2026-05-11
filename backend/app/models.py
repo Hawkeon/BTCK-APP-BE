@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime, timezone
+from typing import Optional
 
 from pydantic import EmailStr
 from sqlalchemy import DateTime
@@ -10,7 +11,8 @@ def get_datetime_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# Shared properties
+# ============ User Models ============
+
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
     is_active: bool = True
@@ -18,7 +20,6 @@ class UserBase(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
 
 
-# Properties to receive via API on creation
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=128)
 
@@ -29,9 +30,8 @@ class UserRegister(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
 
 
-# Properties to receive via API on update, all are optional
 class UserUpdate(UserBase):
-    email: EmailStr | None = Field(default=None, max_length=255)  # type: ignore[assignment]
+    email: EmailStr | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
@@ -45,21 +45,17 @@ class UpdatePassword(SQLModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
-# Database model, database table inferred from class name
 class User(UserBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
+        sa_type=DateTime(timezone=True),
     )
-    items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
-    categories: list["Category"] = Relationship(back_populates="owner", cascade_delete=True)
-    budgets: list["Budget"] = Relationship(back_populates="owner", cascade_delete=True)
-    expenses: list["Expense"] = Relationship(back_populates="owner", cascade_delete=True)
+    owned_events: list["Event"] = Relationship(back_populates="owner", cascade_delete=True)
+    memberships: list["EventMember"] = Relationship(back_populates="user", cascade_delete=True)
 
 
-# Properties to return via API, id is always required
 class UserPublic(UserBase):
     id: uuid.UUID
     created_at: datetime | None = None
@@ -70,87 +66,23 @@ class UsersPublic(SQLModel):
     count: int
 
 
-# Shared properties
-class ItemBase(SQLModel):
-    title: str = Field(min_length=1, max_length=255)
-    description: str | None = Field(default=None, max_length=255)
+# ============ Event Models ============
 
-
-# Properties to receive on item creation
-class ItemCreate(ItemBase):
-    pass
-
-
-# Properties to receive on item update
-class ItemUpdate(ItemBase):
-    title: str | None = Field(default=None, min_length=1, max_length=255)  # type: ignore[assignment]
-
-
-# Database model, database table inferred from class name
-class Item(ItemBase, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    created_at: datetime | None = Field(
-        default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
-    )
-    owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
-    )
-    owner: User | None = Relationship(back_populates="items")
-
-
-# Properties to return via API, id is always required
-class ItemPublic(ItemBase):
-    id: uuid.UUID
-    owner_id: uuid.UUID
-    created_at: datetime | None = None
-
-
-class ItemsPublic(SQLModel):
-    data: list[ItemPublic]
-    count: int
-
-
-# Generic message
-class Message(SQLModel):
-    message: str
-
-
-# JSON payload containing access token
-class Token(SQLModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-# Contents of JWT token
-class TokenPayload(SQLModel):
-    sub: str | None = None
-
-
-class NewPassword(SQLModel):
-    token: str
-    new_password: str = Field(min_length=8, max_length=128)
-
-
-# ============ Category Models ============
-
-class CategoryBase(SQLModel):
+class EventBase(SQLModel):
     name: str = Field(min_length=1, max_length=100)
-    icon: str | None = Field(default=None, max_length=50)
-    color: str | None = Field(default=None, max_length=7)  # hex color
+    description: str | None = Field(default=None, max_length=500)
 
 
-class CategoryCreate(CategoryBase):
+class EventCreate(EventBase):
     pass
 
 
-class CategoryUpdate(SQLModel):
+class EventUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    icon: str | None = Field(default=None, max_length=50)
-    color: str | None = Field(default=None, max_length=7)
+    description: str | None = Field(default=None, max_length=500)
 
 
-class Category(CategoryBase, table=True):
+class Event(EventBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -159,85 +91,85 @@ class Category(CategoryBase, table=True):
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    owner: User | None = Relationship(back_populates="categories")
-    budgets: list["Budget"] = Relationship(back_populates="category", cascade_delete=True)
-    expenses: list["Expense"] = Relationship(back_populates="category", cascade_delete=True)
+    owner: Optional["User"] = Relationship(back_populates="owned_events")
+    members: list["EventMember"] = Relationship(back_populates="event", cascade_delete=True)
+    expenses: list["Expense"] = Relationship(back_populates="event", cascade_delete=True)
 
 
-class CategoryPublic(CategoryBase):
+class EventPublic(EventBase):
     id: uuid.UUID
+    owner_id: uuid.UUID
     created_at: datetime | None = None
+    member_count: int = 0
+    expense_count: int = 0
 
 
-# ============ Budget Models ============
-
-class BudgetBase(SQLModel):
-    name: str = Field(min_length=1, max_length=100)
-    amount: float = Field(gt=0)
-    period: str = Field(max_length=20)  # monthly, weekly, yearly
-    start_date: date = Field(default_factory=date.today)
+class EventsPublic(SQLModel):
+    data: list[EventPublic]
+    count: int
 
 
-class BudgetCreate(BudgetBase):
-    category_id: uuid.UUID
+# ============ Event Member Models ============
 
-
-class BudgetUpdate(SQLModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    amount: float | None = Field(default=None, gt=0)
-    period: str | None = Field(default=None, max_length=20)
-    start_date: date | None = None
-    category_id: uuid.UUID | None = None
-
-
-class Budget(BudgetBase, table=True):
+class EventMember(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    created_at: datetime | None = Field(
+    event_id: uuid.UUID = Field(
+        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+    )
+    user_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    joined_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
-    )
-    owner: User | None = Relationship(back_populates="budgets")
-    category_id: uuid.UUID = Field(
-        foreign_key="category.id", nullable=False, ondelete="CASCADE"
-    )
-    category: Category | None = Relationship(back_populates="budgets")
+    event: Optional["Event"] = Relationship(back_populates="members")
+    user: Optional["User"] = Relationship(back_populates="memberships")
 
 
-class BudgetPublic(BudgetBase):
+class EventMemberPublic(SQLModel):
     id: uuid.UUID
-    owner_id: uuid.UUID
-    category_id: uuid.UUID
-    created_at: datetime | None = None
-    spent: float = 0  # calculated field, not in DB
+    user_id: uuid.UUID
+    joined_at: datetime | None = None
+    user_email: str | None = None
+    user_full_name: str | None = None
 
 
-class BudgetsPublic(SQLModel):
-    data: list[BudgetPublic]
-    count: int
+class AddMemberRequest(SQLModel):
+    user_id: uuid.UUID
 
 
 # ============ Expense Models ============
 
 class ExpenseBase(SQLModel):
-    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=255)
     amount: float = Field(gt=0)
-    date: date = Field(default_factory=date.today)
-    notes: str | None = Field(default=None, max_length=500)
+    expense_date: date = Field(default_factory=date.today)
+    category: str | None = Field(default=None, max_length=50)  # food, transport, rent, utilities, other
 
 
-class ExpenseCreate(ExpenseBase):
-    category_id: uuid.UUID
+class ExpenseCreate(SQLModel):
+    description: str = Field(min_length=1, max_length=255)
+    amount: float = Field(gt=0)
+    expense_date: date = Field(default_factory=date.today)
+    category: str | None = Field(default=None, max_length=50)
+    split_type: str = Field(default="equal", max_length=20)  # "equal" or "custom"
+    # For equal split: which user_ids to include (all members if empty)
+    include_user_ids: list[uuid.UUID] = []
+    # For custom split: exact amounts per user
+    splits: list["CustomSplit"] = []
+
+
+class CustomSplit(SQLModel):
+    user_id: uuid.UUID
+    amount: float = Field(gt=0)
 
 
 class ExpenseUpdate(SQLModel):
-    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, min_length=1, max_length=255)
     amount: float | None = Field(default=None, gt=0)
-    date: date | None = None
-    notes: str | None = Field(default=None, max_length=500)
-    category_id: uuid.UUID | None = None
+    expense_date: date | None = None
+    category: str | None = Field(default=None, max_length=50)
 
 
 class Expense(ExpenseBase, table=True):
@@ -246,23 +178,107 @@ class Expense(ExpenseBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    owner_id: uuid.UUID = Field(
+    event_id: uuid.UUID = Field(
+        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+    )
+    payer_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    owner: User | None = Relationship(back_populates="expenses")
-    category_id: uuid.UUID = Field(
-        foreign_key="category.id", nullable=False, ondelete="CASCADE"
+    split_type: str = Field(default="equal", max_length=20)
+    event: Optional["Event"] = Relationship(back_populates="expenses")
+    payer: Optional["User"] = Relationship()
+    splits: list["ExpenseSplit"] = Relationship(back_populates="expense", cascade_delete=True)
+
+
+class ExpenseSplit(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    expense_id: uuid.UUID = Field(
+        foreign_key="expense.id", nullable=False, ondelete="CASCADE"
     )
-    category: Category | None = Relationship(back_populates="expenses")
+    user_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    amount_owed: float = Field(gt=0)
+    is_excluded: bool = Field(default=False)  # True = not part of this expense
+    expense: Optional["Expense"] = Relationship(back_populates="splits")
+    user: Optional["User"] = Relationship()
 
 
 class ExpensePublic(ExpenseBase):
     id: uuid.UUID
-    owner_id: uuid.UUID
-    category_id: uuid.UUID
+    event_id: uuid.UUID
+    payer_id: uuid.UUID
+    split_type: str
     created_at: datetime | None = None
+    payer_email: str | None = None
+    payer_full_name: str | None = None
+    splits: list["ExpenseSplitPublic"] = []
+
+
+class ExpenseSplitPublic(SQLModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    amount_owed: float
+    is_excluded: bool
+    user_email: str | None = None
+    user_full_name: str | None = None
 
 
 class ExpensesPublic(SQLModel):
     data: list[ExpensePublic]
     count: int
+
+
+# ============ Balance Models ============
+
+class UserBalance(SQLModel):
+    user_id: uuid.UUID
+    user_email: str
+    user_full_name: str | None
+    total_paid: float
+    total_owed: float
+    net_balance: float  # positive = others owe user, negative = user owes
+
+
+class EventBalances(SQLModel):
+    event_id: uuid.UUID
+    event_name: str
+    balances: list[UserBalance]
+
+
+class MyBalanceSummary(SQLModel):
+    total_you_owe: float
+    total_owed_to_you: float
+    net_balance: float  # positive = you are owed, negative = you owe
+
+
+class MyBalanceDetail(SQLModel):
+    events: list[EventBalances]
+    summary: MyBalanceSummary
+
+
+# ============ Generic Models ============
+
+class Message(SQLModel):
+    message: str
+
+
+class Token(SQLModel):
+    access_token: str
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+
+
+class RefreshTokenRequest(SQLModel):
+    refresh_token: str
+
+
+class TokenPayload(SQLModel):
+    sub: str | None = None
+    exp: int | None = None
+    type: str | None = None
+
+
+class NewPassword(SQLModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)
