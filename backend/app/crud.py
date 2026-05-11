@@ -1,13 +1,11 @@
 import uuid
-from datetime import date
 from typing import Any
 
 from sqlmodel import Session, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
-    AddMemberRequest,
-    CustomSplit,
+    AddMemberByEmailRequest,
     Event,
     EventBalances,
     EventCreate,
@@ -19,15 +17,25 @@ from app.models import (
     ExpenseCreate,
     ExpensePublic,
     ExpenseSplit,
+    ExpenseSplitCreate,
     ExpenseSplitPublic,
     ExpenseUpdate,
+    InviteCode,
+    InviteCodeCreate,
     MyBalanceDetail,
     MyBalanceSummary,
+    Settlement,
+    SettlementCreate,
+    SimplifiedDebt,
+    SimplifiedDebtsResponse,
+    EventStats,
     User,
     UserBalance,
     UserCreate,
     UserUpdate,
+    get_datetime_utc,
 )
+
 
 # Dummy hash for timing attack prevention when user not found
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
@@ -64,6 +72,18 @@ def get_user_by_email(*, session: Session, email: str) -> User | None:
     return session.exec(statement).first()
 
 
+def get_user_by_id(*, session: Session, user_id: uuid.UUID) -> User | None:
+    return session.get(User, user_id)
+
+
+def search_users_by_email(*, session: Session, email: str, current_user_id: uuid.UUID) -> list[User]:
+    statement = select(User).where(
+        User.email.ilike(f"%{email}%"),
+        User.id != current_user_id
+    )
+    return session.exec(statement).all()
+
+
 def authenticate(*, session: Session, email: str, password: str) -> User | None:
     db_user = get_user_by_email(session=session, email=email)
     if not db_user:
@@ -82,13 +102,13 @@ def authenticate(*, session: Session, email: str, password: str) -> User | None:
 
 # ============ Event CRUD ============
 
-def create_event(*, session: Session, event_in: EventCreate, owner_id: uuid.UUID) -> Event:
-    db_obj = Event.model_validate(event_in, update={"owner_id": owner_id})
+def create_event(*, session: Session, event_in: EventCreate, created_by_id: uuid.UUID) -> Event:
+    db_obj = Event.model_validate(event_in, update={"created_by_id": created_by_id})
     session.add(db_obj)
     session.commit()
     session.refresh(db_obj)
-    # Auto-add owner as member
-    member = EventMember(event_id=db_obj.id, user_id=owner_id)
+    # Auto-add creator as member
+    member = EventMember(event_id=db_obj.id, user_id=created_by_id)
     session.add(member)
     session.commit()
     return db_obj
@@ -121,9 +141,9 @@ def is_event_member(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
     return session.exec(statement).first() is not None
 
 
-def is_event_owner(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+def is_event_creator(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     statement = select(Event).where(
-        Event.id == event_id, Event.owner_id == user_id
+        Event.id == event_id, Event.created_by_id == user_id
     )
     return session.exec(statement).first() is not None
 
@@ -144,7 +164,7 @@ def delete_event(*, session: Session, db_obj: Event) -> None:
 
 # ============ Event Member CRUD ============
 
-def add_member(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> EventMember:
+def add_member_by_user_id(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> EventMember:
     existing = session.exec(
         select(EventMember).where(
             EventMember.event_id == event_id, EventMember.user_id == user_id
@@ -157,6 +177,13 @@ def add_member(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> 
     session.commit()
     session.refresh(db_obj)
     return db_obj
+
+
+def add_member_by_email(*, session: Session, event_id: uuid.UUID, email: str) -> EventMember | None:
+    user = get_user_by_email(session=session, email=email)
+    if not user:
+        return None
+    return add_member_by_user_id(session=session, event_id=event_id, user_id=user.id)
 
 
 def remove_member(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> bool:
@@ -182,49 +209,39 @@ def get_event_member_ids(*, session: Session, event_id: uuid.UUID) -> list[uuid.
     return [m.user_id for m in members]
 
 
+def get_event_member_user(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+    member = session.exec(
+        select(EventMember).where(
+            EventMember.event_id == event_id, EventMember.user_id == user_id
+        )
+    ).first()
+    if not member:
+        return None
+    return session.get(User, user_id)
+
+
 # ============ Expense CRUD ============
 
-def create_expense(*, session: Session, expense_in: ExpenseCreate, event_id: uuid.UUID, payer_id: uuid.UUID) -> Expense:
+def create_expense(*, session: Session, expense_in: ExpenseCreate, event_id: uuid.UUID, created_by_id: uuid.UUID) -> Expense:
     db_obj = Expense(
         description=expense_in.description,
         amount=expense_in.amount,
-        expense_date=expense_in.expense_date,
-        category=expense_in.category,
         event_id=event_id,
-        payer_id=payer_id,
-        split_type=expense_in.split_type,
+        payer_id=expense_in.payer_id,
+        created_by_id=created_by_id,
     )
     session.add(db_obj)
     session.commit()
     session.refresh(db_obj)
 
-    # Create splits based on split_type
-    if expense_in.split_type == "equal":
-        # Include all members or specific users if provided
-        if expense_in.include_user_ids:
-            user_ids = expense_in.include_user_ids
-        else:
-            user_ids = get_event_member_ids(session=session, event_id=event_id)
-
-        split_amount = expense_in.amount / len(user_ids) if user_ids else 0
-        for uid in user_ids:
-            split = ExpenseSplit(
-                expense_id=db_obj.id,
-                user_id=uid,
-                amount_owed=round(split_amount, 2),
-                is_excluded=False,
-            )
-            session.add(split)
-    else:
-        # Custom splits
-        for cs in expense_in.splits:
-            split = ExpenseSplit(
-                expense_id=db_obj.id,
-                user_id=cs.user_id,
-                amount_owed=cs.amount,
-                is_excluded=False,
-            )
-            session.add(split)
+    # Create splits
+    for split_in in expense_in.splits:
+        split = ExpenseSplit(
+            expense_id=db_obj.id,
+            user_id=split_in.user_id,
+            amount_owed=split_in.amount_owed,
+        )
+        session.add(split)
 
     session.commit()
     session.refresh(db_obj)
@@ -237,7 +254,7 @@ def get_expenses(*, session: Session, event_id: uuid.UUID, skip: int = 0, limit:
         .where(Expense.event_id == event_id)
         .offset(skip)
         .limit(limit)
-        .order_by(Expense.expense_date.desc())
+        .order_by(Expense.created_at.desc())
     )
     return session.exec(statement).all()
 
@@ -270,27 +287,38 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
     users = {u.id: u for u in session.exec(select(User).where(User.id.in_(member_ids))).all()}
 
     expenses = get_expenses(session=session, event_id=event_id)
+    settlements = get_settlements(session=session, event_id=event_id)
 
     paid = {uid: 0.0 for uid in member_ids}
     owed = {uid: 0.0 for uid in member_ids}
+    settled_from = {uid: 0.0 for uid in member_ids}
+    settled_to = {uid: 0.0 for uid in member_ids}
 
     for exp in expenses:
         paid[exp.payer_id] = paid.get(exp.payer_id, 0.0) + exp.amount
         for split in exp.splits:
-            if not split.is_excluded:
-                owed[split.user_id] = owed.get(split.user_id, 0.0) + split.amount_owed
+            owed[split.user_id] = owed.get(split.user_id, 0.0) + split.amount_owed
+
+    for s in settlements:
+        settled_from[s.from_user_id] = settled_from.get(s.from_user_id, 0.0) + s.amount
+        settled_to[s.to_user_id] = settled_to.get(s.to_user_id, 0.0) + s.amount
 
     balances = []
     for uid in member_ids:
         user = users.get(uid)
         if user:
+            net_before_settlements = paid.get(uid, 0.0) - owed.get(uid, 0.0)
+            net_from_settlements = settled_to.get(uid, 0.0) - settled_from.get(uid, 0.0)
+            net_balance = net_before_settlements + net_from_settlements
+
             balances.append(UserBalance(
                 user_id=uid,
                 user_email=user.email,
                 user_full_name=user.full_name,
+                user_qr_code_url=user.qr_code_url,
                 total_paid=round(paid.get(uid, 0.0), 2),
                 total_owed=round(owed.get(uid, 0.0), 2),
-                net_balance=round(paid.get(uid, 0.0) - owed.get(uid, 0.0), 2)
+                net_balance=round(net_balance, 2)
             ))
 
     return EventBalances(
@@ -301,7 +329,6 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
 
 
 def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyBalanceDetail:
-    """Calculate what user owes across all events"""
     events = get_events(session=session, user_id=user_id)
 
     total_you_owe = 0.0
@@ -312,7 +339,6 @@ def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyB
         eb = calculate_event_balances(session=session, event_id=event.id)
         event_balances.append(eb)
 
-        # Find current user's balance in this event
         for bal in eb.balances:
             if bal.user_id == user_id:
                 if bal.net_balance < 0:
@@ -327,3 +353,192 @@ def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyB
     )
 
     return MyBalanceDetail(events=event_balances, summary=summary)
+
+
+# ============ Settlement CRUD ============
+
+def create_settlement(
+    *, session: Session, settlement_in: SettlementCreate, event_id: uuid.UUID
+) -> Settlement:
+    db_obj = Settlement(
+        event_id=event_id,
+        from_user_id=settlement_in.from_user_id,
+        to_user_id=settlement_in.to_user_id,
+        amount=settlement_in.amount,
+        note=settlement_in.note,
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def get_settlements(
+    *, session: Session, event_id: uuid.UUID, skip: int = 0, limit: int = 100
+) -> list[Settlement]:
+    statement = (
+        select(Settlement)
+        .where(Settlement.event_id == event_id)
+        .offset(skip)
+        .limit(limit)
+        .order_by(Settlement.created_at.desc())
+    )
+    return session.exec(statement).all()
+
+
+def get_settlement(*, session: Session, settlement_id: uuid.UUID, event_id: uuid.UUID) -> Settlement | None:
+    statement = select(Settlement).where(
+        Settlement.id == settlement_id, Settlement.event_id == event_id
+    )
+    return session.exec(statement).first()
+
+
+def delete_settlement(*, session: Session, db_obj: Settlement) -> None:
+    session.delete(db_obj)
+    session.commit()
+
+
+def get_settlements_for_user_in_event(
+    *, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[list[Settlement], list[Settlement]]:
+    all_settlements = get_settlements(session=session, event_id=event_id)
+    made = [s for s in all_settlements if s.from_user_id == user_id]
+    received = [s for s in all_settlements if s.to_user_id == user_id]
+    return made, received
+
+
+def calculate_event_balances_with_settlements(*, session: Session, event_id: uuid.UUID) -> EventBalances:
+    return calculate_event_balances(session=session, event_id=event_id)
+
+
+# ============ Invite Code CRUD ============
+
+def generate_invite_code(*, session: Session, event_id: uuid.UUID, created_by_id: uuid.UUID, expires_in_hours: int | None = None, max_uses: int | None = None) -> InviteCode:
+    import secrets
+    code = secrets.token_urlsafe(8)[:12].upper()
+    expires_at = None
+    if expires_in_hours:
+        from datetime import timedelta
+        expires_at = get_datetime_utc() + timedelta(hours=expires_in_hours)
+
+    db_obj = InviteCode(
+        event_id=event_id,
+        code=code,
+        created_by_id=created_by_id,
+        expires_at=expires_at,
+        max_uses=max_uses,
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def get_invite_code_by_code(*, session: Session, code: str) -> InviteCode | None:
+    statement = select(InviteCode).where(InviteCode.code == code)
+    return session.exec(statement).first()
+
+
+def is_invite_code_valid(*, session: Session, code: str) -> bool:
+    invite = get_invite_code_by_code(session=session, code=code)
+    if not invite:
+        return False
+    if invite.expires_at and invite.expires_at < get_datetime_utc():
+        return False
+    if invite.max_uses and invite.use_count >= invite.max_uses:
+        return False
+    return True
+
+
+def use_invite_code(*, session: Session, code: str) -> bool:
+    invite = get_invite_code_by_code(session=session, code=code)
+    if not invite:
+        return False
+    if not is_invite_code_valid(session=session, code=code):
+        return False
+    invite.use_count += 1
+    session.add(invite)
+    session.commit()
+    return True
+
+
+# ============ Simplify Debts Algorithm ============
+
+def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> SimplifiedDebtsResponse:
+    """Minimum cash flow algorithm to minimize number of transactions."""
+    balances = calculate_event_balances(session=session, event_id=event_id)
+    member_ids = [b.user_id for b in balances.balances]
+    users = {b.user_id: b for b in balances.balances}
+
+    # Calculate net balance for each user
+    net = {}
+    for bal in balances.balances:
+        net[bal.user_id] = bal.net_balance
+
+    # Separate creditors (positive) and debtors (negative)
+    creditors = [(uid, net[uid]) for uid in member_ids if net[uid] > 0.01]
+    debtors = [(uid, -net[uid]) for uid in member_ids if net[uid] < -0.01]
+
+    # Sort by absolute amount descending
+    creditors.sort(key=lambda x: x[1], reverse=True)
+    debtors.sort(key=lambda x: x[1], reverse=True)
+
+    debts = []
+    i, j = 0, 0
+    while i < len(creditors) and j < len(debtors):
+        creditor_id, credit_amount = creditors[i]
+        debtor_id, debt_amount = debtors[j]
+
+        # Settle the minimum of the two
+        settle_amount = min(credit_amount, debt_amount)
+        if settle_amount > 0.01:
+            creditor = users.get(creditor_id)
+            debtor = users.get(debtor_id)
+            if creditor and debtor:
+                debts.append(SimplifiedDebt(
+                    from_user_id=debtor_id,
+                    from_user_email=debtor.user_email,
+                    from_user_full_name=debtor.user_full_name,
+                    to_user_id=creditor_id,
+                    to_user_email=creditor.user_email,
+                    to_user_full=creditor.user_full_name,
+                    to_user_qr_code_url=creditor.user_qr_code_url,
+                    amount=round(settle_amount, 2)
+                ))
+
+        # Update remaining amounts
+        creditors[i] = (creditor_id, credit_amount - settle_amount)
+        debtors[j] = (debtor_id, debt_amount - settle_amount)
+
+        if creditors[i][1] < 0.01:
+            i += 1
+        if debtors[j][1] < 0.01:
+            j += 1
+
+    return SimplifiedDebtsResponse(event_id=event_id, debts=debts)
+
+
+# ============ Event Stats ============
+
+def get_event_stats(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID) -> EventStats:
+    balances = calculate_event_balances(session=session, event_id=event_id)
+    expenses = get_expenses(session=session, event_id=event_id)
+    members = get_event_members(session=session, event_id=event_id)
+
+    total_spent = sum(e.amount for e in expenses)
+
+    user_balance = None
+    for bal in balances.balances:
+        if bal.user_id == user_id:
+            user_balance = bal
+            break
+
+    return EventStats(
+        event_id=event_id,
+        total_spent=round(total_spent, 2),
+        expense_count=len(expenses),
+        member_count=len(members),
+        your_total_paid=user_balance.total_paid if user_balance else 0,
+        your_total_owed=user_balance.total_owed if user_balance else 0,
+        your_net_balance=user_balance.net_balance if user_balance else 0,
+    )

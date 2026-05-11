@@ -1,6 +1,9 @@
+import os
+
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
@@ -31,3 +34,8 @@ if settings.all_cors_origins:
     )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Mount static files for QR code uploads
+uploads_path = os.path.join(os.path.dirname(__file__), "..", "uploads")
+if os.path.exists(uploads_path):
+    app.mount("/uploads", StaticFiles(directory=uploads_path), name="uploads")

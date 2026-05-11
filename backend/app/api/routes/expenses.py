@@ -23,22 +23,19 @@ def expense_to_public(expense, session) -> ExpensePublic:
     for s in expense.splits:
         user = session.get(User, s.user_id)
         splits.append(ExpenseSplitPublic(
-            id=s.id,
             user_id=s.user_id,
             amount_owed=s.amount_owed,
-            is_excluded=s.is_excluded,
             user_email=user.email if user else None,
-            user_full_name=user.full_name if user else None
+            user_full_name=user.full_name if user else None,
+            user_qr_code_url=user.qr_code_url if user else None,
         ))
     return ExpensePublic(
         id=expense.id,
         description=expense.description,
         amount=expense.amount,
-        expense_date=expense.expense_date,
-        category=expense.category,
         event_id=expense.event_id,
+        created_by_id=expense.created_by_id,
         payer_id=expense.payer_id,
-        split_type=expense.split_type,
         created_at=expense.created_at,
         payer_email=payer.email if payer else None,
         payer_full_name=payer.full_name if payer else None,
@@ -75,24 +72,30 @@ def create_expense(
 ) -> ExpensePublic:
     check_event_access(event_id, session, current_user)
 
-    # Validate split_type
-    if expense_in.split_type not in ("equal", "custom"):
-        raise HTTPException(status_code=400, detail="split_type must be 'equal' or 'custom'")
+    # Validate: current user must be an event member
+    if not crud.is_event_member(session=session, event_id=event_id, user_id=current_user.id):
+        raise HTTPException(status_code=403, detail="You are not a member of this event")
 
-    # Validate custom splits
-    if expense_in.split_type == "custom":
-        if not expense_in.splits:
-            raise HTTPException(status_code=400, detail="Custom split requires splits array")
-        # Check that split amounts equal total
-        total_splits = sum(s.amount for s in expense_in.splits)
-        if abs(total_splits - expense_in.amount) > 0.01:
-            raise HTTPException(status_code=400, detail="Split amounts must equal total amount")
+    # Validate: payer_id must be an event member
+    if not crud.is_event_member(session=session, event_id=event_id, user_id=expense_in.payer_id):
+        raise HTTPException(status_code=400, detail="Payer must be an event member")
+
+    # Validate: all split user_ids must be event members
+    member_ids = set(crud.get_event_member_ids(session=session, event_id=event_id))
+    for split in expense_in.splits:
+        if split.user_id not in member_ids:
+            raise HTTPException(status_code=400, detail=f"User {split.user_id} is not a member of this event")
+
+    # Validate: sum of splits must equal total amount
+    total_splits = sum(s.amount_owed for s in expense_in.splits)
+    if abs(total_splits - expense_in.amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Split amounts must equal total amount")
 
     expense = crud.create_expense(
         session=session,
         expense_in=expense_in,
         event_id=event_id,
-        payer_id=current_user.id
+        created_by_id=current_user.id,
     )
     return expense_to_public(expense, session)
 
@@ -123,8 +126,8 @@ def update_expense(
     expense = crud.get_expense(session=session, expense_id=expense_id, event_id=event_id)
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    if expense.payer_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only payer can update expense")
+    if expense.created_by_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only creator can update expense")
     expense = crud.update_expense(session=session, db_obj=expense, obj_in=expense_in)
     return expense_to_public(expense, session)
 
@@ -140,7 +143,7 @@ def delete_expense(
     expense = crud.get_expense(session=session, expense_id=expense_id, event_id=event_id)
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    if expense.payer_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only payer can delete expense")
+    if expense.created_by_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only creator can delete expense")
     crud.delete_expense(session=session, db_obj=expense)
     return Message(message="Expense deleted successfully")

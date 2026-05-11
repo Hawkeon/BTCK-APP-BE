@@ -1,33 +1,40 @@
-FROM python:3.10
+# Bill Split Backend Dockerfile
+# Optimized for development with Docker Compose
+
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /bin/
+WORKDIR /app
 
-# Compile bytecode
-ENV UV_COMPILE_BYTECODE=1
-ENV UV_LINK_MODE=copy
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app/
+# Copy requirements first for better caching
+COPY pyproject.toml ./
 
-ENV PATH="/app/.venv/bin:$PATH"
+# Install Python dependencies directly (pyproject.toml has [project] format incompatible with pip)
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary \
+    alembic pydantic-settings python-multipart email-validator pyjwt "pwdlib[argon2,bcrypt]" argon2 bcrypt sqlmodel \
+    python-dotenv "pydantic>=2.0" sentry-sdk httpx emails jinja2
 
-# Install dependencies
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-workspace --package app
+# Copy application code
+COPY alembic.ini ./
+COPY app ./app
 
-COPY alembic.ini pyproject.toml /app/backend/
-COPY app /app/backend/app
+# Create uploads directory for QR codes
+RUN mkdir -p /app/uploads/qr_codes
 
-# Sync the project
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --package app
+# Expose port
+EXPOSE 8000
 
-WORKDIR /app/backend/
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/utils/health-check/ || exit 1
 
-CMD ["fastapi", "run", "--workers", "4", "app/main.py"]
+# Default command - uses shell form so it can be overridden by compose
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

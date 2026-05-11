@@ -1,67 +1,88 @@
+# Bill Split Backend - Docker Compose Configuration
+#
+# Usage:
+#   1. Copy .env.example to .env and adjust if needed
+#   2. Run: docker-compose up -d
+#   3. API available at: http://localhost:8000
+#   4. Swagger docs: http://localhost:8000/docs
+
 services:
   db:
-    image: postgres:18
+    image: postgres:16-alpine
     restart: always
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      retries: 5
-      start_period: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      retries: 10
+      start_period: 10s
+      timeout: 5s
     volumes:
-      - app-db-data:/var/lib/postgresql/data/pgdata
+      - postgres_data:/var/lib/postgresql/data
     env_file:
       - .env
     environment:
-      - PGDATA=/var/lib/postgresql/data/pgdata
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
-      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
-      - POSTGRES_DB=${POSTGRES_DB?Variable not set}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - default
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: localhost/expense-tracker-backend:latest
-    restart: always
+    image: billsplit-backend:latest
+    container_name: billsplit-backend
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     env_file:
       - .env
     environment:
+      # Database connection - use service name 'db' for internal Docker networking
       - POSTGRES_SERVER=db
-      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Application settings
       - ENVIRONMENT=${ENVIRONMENT:-local}
+      - SECRET_KEY=${SECRET_KEY}
+      - BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS}
+    # Startup: run migrations, seed data, then start server
     command: >
-      bash -c "python app/backend_pre_start.py &&
-               alembic upgrade head &&
-               python app/initial_data.py &&
-               fastapi run --workers 4 app/main.py"
+      sh -c "
+        echo 'Waiting for database...' &&
+        sleep 3 &&
+        echo 'Running database migrations...' &&
+        alembic upgrade head &&
+        echo 'Seeding initial data...' &&
+        python app/initial_data.py &&
+        echo 'Starting FastAPI server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - uploads_data:/app/uploads
     healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-f",
-          "http://localhost:8000/api/v1/utils/health-check/",
-        ]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+    networks:
+      - default
 
 volumes:
-  app-db-data:
+  postgres_data:
+    driver: local
+  uploads_data:
+    driver: local
 
 networks:
   default:
-    driver: bridge
-  traefik-public:
     driver: bridge
