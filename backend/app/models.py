@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from pydantic import EmailStr
@@ -158,24 +158,31 @@ class AddMemberByEmailRequest(SQLModel):
 
 class ExpenseBase(SQLModel):
     description: str = Field(min_length=1, max_length=255)
-    amount: float = Field(gt=0)
+    amount: int = Field(gt=0)
+    category: str | None = Field(default=None, max_length=50)
+    image_url: str | None = Field(default=None, max_length=500, nullable=True)
+    expense_date: date = Field(default_factory=date.today)
 
 
 class ExpenseCreate(SQLModel):
     description: str = Field(min_length=1, max_length=255)
-    amount: float = Field(gt=0)
+    amount: int = Field(gt=0)
+    category: str | None = Field(default=None, max_length=50)
+    expense_date: date | None = Field(default_factory=date.today)
     payer_id: uuid.UUID
     splits: list["ExpenseSplitCreate"] = Field(min_length=1)
 
 
 class ExpenseSplitCreate(SQLModel):
     user_id: uuid.UUID
-    amount_owed: float = Field(gt=0)
+    amount_owed: int = Field(gt=0)
 
 
 class ExpenseUpdate(SQLModel):
     description: str | None = Field(default=None, min_length=1, max_length=255)
-    amount: float | None = Field(default=None, gt=0)
+    amount: int | None = Field(default=None, gt=0)
+    category: str | None = Field(default=None, max_length=50)
+    expense_date: date | None = Field(default=None)
 
 
 class Expense(ExpenseBase, table=True):
@@ -219,14 +226,14 @@ class ExpenseSplit(SQLModel, table=True):
     user_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
-    amount_owed: float = Field(gt=0)
+    amount_owed: int = Field(gt=0)
     expense: Optional["Expense"] = Relationship(back_populates="splits")
     user: Optional["User"] = Relationship(back_populates="expense_splits")
 
 
 class ExpenseSplitPublic(SQLModel):
     user_id: uuid.UUID
-    amount_owed: float
+    amount_owed: int
     user_email: str | None = None
     user_full_name: str | None = None
     user_qr_code_url: str | None = None
@@ -244,9 +251,9 @@ class UserBalance(SQLModel):
     user_email: str
     user_full_name: str | None
     user_qr_code_url: str | None = None
-    total_paid: float
-    total_owed: float
-    net_balance: float  # positive = others owe user, negative = user owes
+    total_paid: int
+    total_owed: int
+    net_balance: int  # positive = others owe user, negative = user owes
 
 
 class EventBalances(SQLModel):
@@ -256,9 +263,9 @@ class EventBalances(SQLModel):
 
 
 class MyBalanceSummary(SQLModel):
-    total_you_owe: float
-    total_owed_to_you: float
-    net_balance: float  # positive = you are owed, negative = you owe
+    total_you_owe: int
+    total_owed_to_you: int
+    net_balance: int  # positive = you are owed, negative = you owe
 
 
 class MyBalanceDetail(SQLModel):
@@ -296,13 +303,13 @@ class NewPassword(SQLModel):
 # ============ Settlement Models ============
 
 class SettlementBase(SQLModel):
-    amount: float = Field(gt=0)
+    amount: int = Field(gt=0)
 
 
 class SettlementCreate(SQLModel):
     from_user_id: uuid.UUID
     to_user_id: uuid.UUID
-    amount: float = Field(gt=0)
+    amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
 
 
@@ -317,7 +324,7 @@ class Settlement(SettlementBase, table=True):
     to_user_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    amount: float = Field(gt=0)
+    amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -390,7 +397,7 @@ class SimplifiedDebt(SQLModel):
     to_user_email: str
     to_user_full: str | None
     to_user_qr_code_url: str | None
-    amount: float
+    amount: int
 
 
 class SimplifiedDebtsResponse(SQLModel):
@@ -402,9 +409,9 @@ class SimplifiedDebtsResponse(SQLModel):
 
 class EventStats(SQLModel):
     event_id: uuid.UUID
-    total_spent: float
+    total_spent: int
     expense_count: int
     member_count: int
-    your_total_paid: float
-    your_total_owed: float
-    your_net_balance: float
+    your_total_paid: int
+    your_total_owed: int
+    your_net_balance: int

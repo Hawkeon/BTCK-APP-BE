@@ -1,6 +1,8 @@
+import os
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app import crud
 from app.api.deps import CurrentUser, SessionDep
@@ -33,6 +35,9 @@ def expense_to_public(expense, session) -> ExpensePublic:
         id=expense.id,
         description=expense.description,
         amount=expense.amount,
+        category=expense.category,
+        image_url=expense.image_url,
+        expense_date=expense.expense_date,
         event_id=expense.event_id,
         created_by_id=expense.created_by_id,
         payer_id=expense.payer_id,
@@ -88,7 +93,7 @@ def create_expense(
 
     # Validate: sum of splits must equal total amount
     total_splits = sum(s.amount_owed for s in expense_in.splits)
-    if abs(total_splits - expense_in.amount) > 0.01:
+    if total_splits != expense_in.amount:
         raise HTTPException(status_code=400, detail="Split amounts must equal total amount")
 
     expense = crud.create_expense(
@@ -147,3 +152,45 @@ def delete_expense(
         raise HTTPException(status_code=403, detail="Only creator can delete expense")
     crud.delete_expense(session=session, db_obj=expense)
     return Message(message="Expense deleted successfully")
+
+
+@router.post("/{expense_id}/image", response_model=ExpensePublic)
+async def upload_expense_image(
+    event_id: uuid.UUID,
+    expense_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+) -> ExpensePublic:
+    """Upload an image for an expense as visual reminder."""
+    check_event_access(event_id, session, current_user)
+    expense = crud.get_expense(session=session, expense_id=expense_id, event_id=event_id)
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: JPEG, PNG, GIF, WebP")
+
+    # Create uploads directory if not exists
+    upload_dir = "/app/uploads/expense_images"
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # Generate unique filename
+    file_ext = file.filename.split(".")[-1] if file.filename else "png"
+    filename = f"{expense_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
+    file_path = os.path.join(upload_dir, filename)
+
+    # Save file
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Update expense image_url
+    image_url = f"/uploads/expense_images/{filename}"
+    expense.image_url = image_url
+    session.add(expense)
+    session.commit()
+    session.refresh(expense)
+    return expense_to_public(expense, session)

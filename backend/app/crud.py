@@ -1,6 +1,8 @@
 import uuid
+from datetime import date
 from typing import Any
 
+from sqlalchemy import desc
 from sqlmodel import Session, select
 
 from app.core.security import get_password_hash, verify_password
@@ -226,6 +228,8 @@ def create_expense(*, session: Session, expense_in: ExpenseCreate, event_id: uui
     db_obj = Expense(
         description=expense_in.description,
         amount=expense_in.amount,
+        category=expense_in.category,
+        expense_date=expense_in.expense_date or date.today(),
         event_id=event_id,
         payer_id=expense_in.payer_id,
         created_by_id=created_by_id,
@@ -254,7 +258,7 @@ def get_expenses(*, session: Session, event_id: uuid.UUID, skip: int = 0, limit:
         .where(Expense.event_id == event_id)
         .offset(skip)
         .limit(limit)
-        .order_by(Expense.created_at.desc())
+        .order_by(desc(Expense.expense_date), desc(Expense.created_at))
     )
     return session.exec(statement).all()
 
@@ -289,26 +293,26 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
     expenses = get_expenses(session=session, event_id=event_id)
     settlements = get_settlements(session=session, event_id=event_id)
 
-    paid = {uid: 0.0 for uid in member_ids}
-    owed = {uid: 0.0 for uid in member_ids}
-    settled_from = {uid: 0.0 for uid in member_ids}
-    settled_to = {uid: 0.0 for uid in member_ids}
+    paid = {uid: 0 for uid in member_ids}
+    owed = {uid: 0 for uid in member_ids}
+    settled_from = {uid: 0 for uid in member_ids}
+    settled_to = {uid: 0 for uid in member_ids}
 
     for exp in expenses:
-        paid[exp.payer_id] = paid.get(exp.payer_id, 0.0) + exp.amount
+        paid[exp.payer_id] = paid.get(exp.payer_id, 0) + exp.amount
         for split in exp.splits:
-            owed[split.user_id] = owed.get(split.user_id, 0.0) + split.amount_owed
+            owed[split.user_id] = owed.get(split.user_id, 0) + split.amount_owed
 
     for s in settlements:
-        settled_from[s.from_user_id] = settled_from.get(s.from_user_id, 0.0) + s.amount
-        settled_to[s.to_user_id] = settled_to.get(s.to_user_id, 0.0) + s.amount
+        settled_from[s.from_user_id] = settled_from.get(s.from_user_id, 0) + s.amount
+        settled_to[s.to_user_id] = settled_to.get(s.to_user_id, 0) + s.amount
 
     balances = []
     for uid in member_ids:
         user = users.get(uid)
         if user:
-            net_before_settlements = paid.get(uid, 0.0) - owed.get(uid, 0.0)
-            net_from_settlements = settled_to.get(uid, 0.0) - settled_from.get(uid, 0.0)
+            net_before_settlements = paid.get(uid, 0) - owed.get(uid, 0)
+            net_from_settlements = settled_to.get(uid, 0) - settled_from.get(uid, 0)
             net_balance = net_before_settlements + net_from_settlements
 
             balances.append(UserBalance(
@@ -316,9 +320,9 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
                 user_email=user.email,
                 user_full_name=user.full_name,
                 user_qr_code_url=user.qr_code_url,
-                total_paid=round(paid.get(uid, 0.0), 2),
-                total_owed=round(owed.get(uid, 0.0), 2),
-                net_balance=round(net_balance, 2)
+                total_paid=paid.get(uid, 0),
+                total_owed=owed.get(uid, 0),
+                net_balance=net_balance
             ))
 
     return EventBalances(
@@ -331,8 +335,8 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
 def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyBalanceDetail:
     events = get_events(session=session, user_id=user_id)
 
-    total_you_owe = 0.0
-    total_owed_to_you = 0.0
+    total_you_owe = 0
+    total_owed_to_you = 0
     event_balances = []
 
     for event in events:
@@ -347,9 +351,9 @@ def calculate_my_balance_summary(*, session: Session, user_id: uuid.UUID) -> MyB
                     total_owed_to_you += bal.net_balance
 
     summary = MyBalanceSummary(
-        total_you_owe=round(total_you_owe, 2),
-        total_owed_to_you=round(total_owed_to_you, 2),
-        net_balance=round(total_owed_to_you - total_you_owe, 2)
+        total_you_owe=total_you_owe,
+        total_owed_to_you=total_owed_to_you,
+        net_balance=total_owed_to_you - total_you_owe
     )
 
     return MyBalanceDetail(events=event_balances, summary=summary)
@@ -476,8 +480,8 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
         net[bal.user_id] = bal.net_balance
 
     # Separate creditors (positive) and debtors (negative)
-    creditors = [(uid, net[uid]) for uid in member_ids if net[uid] > 0.01]
-    debtors = [(uid, -net[uid]) for uid in member_ids if net[uid] < -0.01]
+    creditors = [(uid, net[uid]) for uid in member_ids if net[uid] > 0]
+    debtors = [(uid, -net[uid]) for uid in member_ids if net[uid] < 0]
 
     # Sort by absolute amount descending
     creditors.sort(key=lambda x: x[1], reverse=True)
@@ -491,7 +495,7 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
 
         # Settle the minimum of the two
         settle_amount = min(credit_amount, debt_amount)
-        if settle_amount > 0.01:
+        if settle_amount > 0:
             creditor = users.get(creditor_id)
             debtor = users.get(debtor_id)
             if creditor and debtor:
@@ -503,16 +507,16 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
                     to_user_email=creditor.user_email,
                     to_user_full=creditor.user_full_name,
                     to_user_qr_code_url=creditor.user_qr_code_url,
-                    amount=round(settle_amount, 2)
+                    amount=settle_amount
                 ))
 
         # Update remaining amounts
         creditors[i] = (creditor_id, credit_amount - settle_amount)
         debtors[j] = (debtor_id, debt_amount - settle_amount)
 
-        if creditors[i][1] < 0.01:
+        if creditors[i][1] <= 0:
             i += 1
-        if debtors[j][1] < 0.01:
+        if debtors[j][1] <= 0:
             j += 1
 
     return SimplifiedDebtsResponse(event_id=event_id, debts=debts)
@@ -535,7 +539,7 @@ def get_event_stats(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
 
     return EventStats(
         event_id=event_id,
-        total_spent=round(total_spent, 2),
+        total_spent=total_spent,
         expense_count=len(expenses),
         member_count=len(members),
         your_total_paid=user_balance.total_paid if user_balance else 0,
