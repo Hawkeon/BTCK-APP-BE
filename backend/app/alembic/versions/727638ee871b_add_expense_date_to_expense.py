@@ -16,9 +16,9 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('expense', sa.Column('expense_date', sa.Date(), nullable=True))
-    op.execute('UPDATE expense SET expense_date = CURRENT_DATE WHERE expense_date IS NULL')
-    op.alter_column('expense', 'expense_date', nullable=False)
+    op.add_column('expenses', sa.Column('expense_date', sa.Date(), nullable=True))
+    op.execute('UPDATE expenses SET expense_date = CURRENT_DATE WHERE expense_date IS NULL')
+    op.alter_column('expenses', 'expense_date', nullable=False)
 
 
 def downgrade():

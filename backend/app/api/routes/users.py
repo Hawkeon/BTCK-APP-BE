@@ -2,7 +2,7 @@ import os
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlmodel import col, delete, func, select
 
 from app import crud
@@ -10,6 +10,7 @@ from app.api.deps import (
     CurrentUser,
     SessionDep,
     get_current_active_superuser,
+    limiter,
 )
 from app.core.config import settings
 from app.core.security import get_password_hash, verify_password
@@ -123,6 +124,35 @@ async def upload_qr_code(
     # Update user qr_code_url
     qr_code_url = f"/uploads/qr_codes/{filename}"
     current_user.qr_code_url = qr_code_url
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return current_user
+
+
+@router.post("/me/avatar", response_model=UserPublic)
+@limiter.limit("3/minute")
+async def upload_avatar(
+    request: Request,
+    session: SessionDep,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+) -> Any:
+    """Upload avatar image for user profile."""
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: JPEG, PNG, GIF, WebP")
+
+    # Read file content
+    content = await file.read()
+
+    # Upload to storage (S3 or local)
+    from app.services.storage import storage_service
+    avatar_url = await storage_service.upload_image(content, file.filename or "avatar.png", "avatars")
+
+    # Update user avatar_url
+    current_user.avatar_url = avatar_url
     session.add(current_user)
     session.commit()
     session.refresh(current_user)

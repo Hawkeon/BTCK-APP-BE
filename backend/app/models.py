@@ -19,6 +19,7 @@ class UserBase(SQLModel):
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
     qr_code_url: str | None = Field(default=None, max_length=500, nullable=True)
+    avatar_url: str | None = Field(default=None, max_length=500, nullable=True)
 
 
 class UserCreate(UserBase):

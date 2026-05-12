@@ -95,6 +95,34 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER: EmailStr
     FIRST_SUPERUSER_PASSWORD: str
 
+    # S3 Object Storage (supports AWS S3 and MinIO)
+    AWS_ACCESS_KEY_ID: str | None = None
+    AWS_SECRET_ACCESS_KEY: str | None = None
+    S3_BUCKET: str | None = None
+    S3_ENDPOINT_URL: str | None = None
+    S3_REGION: str = "us-east-1"
+
+    # MinIO-specific aliases (for local development)
+    MINIO_ENDPOINT: str | None = None
+    MINIO_ACCESS_KEY: str | None = None
+    MINIO_SECRET_KEY: str | None = None
+    MINIO_BUCKET: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_s3_endpoint(self) -> str | None:
+        return self.S3_ENDPOINT_URL or self.MINIO_ENDPOINT
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_s3_key_id(self) -> str | None:
+        return self.AWS_ACCESS_KEY_ID or self.MINIO_ACCESS_KEY
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_s3_secret(self) -> str | None:
+        return self.AWS_SECRET_ACCESS_KEY or self.MINIO_SECRET_KEY
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (

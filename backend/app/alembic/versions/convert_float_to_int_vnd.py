@@ -17,17 +17,17 @@ depends_on = None
 
 def upgrade():
     # Convert expense.amount from float to int
-    op.execute("ALTER TABLE expense ALTER COLUMN amount TYPE integer USING amount::integer")
+    op.execute("ALTER TABLE expenses ALTER COLUMN amount TYPE integer USING amount::integer")
 
     # Convert expensesplit.amount_owed from float to int
-    op.execute("ALTER TABLE expensesplit ALTER COLUMN amount_owed TYPE integer USING amount_owed::integer")
+    op.execute("ALTER TABLE expense_splits ALTER COLUMN amount_owed TYPE integer USING amount_owed::integer")
 
     # Convert settlement.amount from float to int
-    op.execute("ALTER TABLE settlement ALTER COLUMN amount TYPE integer USING amount::integer")
+    op.execute("ALTER TABLE settlements ALTER COLUMN amount TYPE integer USING amount::integer")
 
 
 def downgrade():
     # Revert to float
-    op.execute("ALTER TABLE expense ALTER COLUMN amount TYPE double precision USING amount::double precision")
-    op.execute("ALTER TABLE expensesplit ALTER COLUMN amount_owed TYPE double precision USING amount_owed::double precision")
-    op.execute("ALTER TABLE settlement ALTER COLUMN amount TYPE double precision USING amount::double precision")
+    op.execute("ALTER TABLE expenses ALTER COLUMN amount TYPE double precision USING amount::double precision")
+    op.execute("ALTER TABLE expense_splits ALTER COLUMN amount_owed TYPE double precision USING amount_owed::double precision")
+    op.execute("ALTER TABLE settlements ALTER COLUMN amount TYPE double precision USING amount::double precision")
