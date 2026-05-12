@@ -26,8 +26,8 @@ RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlalchemy psycopg2-b
 COPY alembic.ini ./
 COPY app ./app
 
-# Create uploads directory for QR codes
-RUN mkdir -p /app/uploads/qr_codes
+# Create uploads directory for QR codes and expense images
+RUN mkdir -p /app/uploads/qr_codes /app/uploads/expense_images
 
 # Expose port
 EXPOSE 8000
