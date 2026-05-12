@@ -20,7 +20,7 @@ COPY pyproject.toml ./
 # Install Python dependencies directly (pyproject.toml has [project] format incompatible with pip)
 RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary \
     alembic pydantic-settings python-multipart email-validator pyjwt "pwdlib[argon2,bcrypt]" argon2 bcrypt sqlmodel \
-    python-dotenv "pydantic>=2.0" sentry-sdk httpx emails jinja2
+    python-dotenv "pydantic>=2.0" sentry-sdk httpx emails jinja2 slowapi
 
 # Copy application code
 COPY alembic.ini ./
