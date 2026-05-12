@@ -1,6 +1,7 @@
 import os
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -26,11 +27,13 @@ class StorageService:
                 region_name=settings.S3_REGION,
             )
             self.bucket = settings.S3_BUCKET or settings.MINIO_BUCKET
+            self._ensure_bucket_exists()
         else:
             self.local_path = "/app/uploads"
 
     def _generate_filename(self, original_filename: str, folder: str) -> str:
-        ext = original_filename.split(".")[-1] if "." in original_filename else "png"
+        basename = os.path.basename(original_filename)
+        ext = basename.rsplit(".", 1)[-1] if "." in basename else "png"
         unique_name = f"{uuid.uuid4().hex[:8]}.{ext}"
         return f"{folder}/{unique_name}"
 
@@ -76,7 +79,11 @@ class StorageService:
                 return False
         else:
             if image_url.startswith("/uploads"):
-                local_path = os.path.join(self.local_path, image_url.lstrip("/uploads/"))
+                relative_path = image_url.removeprefix("/uploads/").lstrip("/")
+                normalized_path = os.path.normpath(relative_path)
+                if normalized_path.startswith("..") or os.path.isabs(normalized_path):
+                    return False
+                local_path = os.path.join(self.local_path, normalized_path)
                 if os.path.exists(local_path):
                     os.remove(local_path)
                     return True
@@ -86,12 +93,31 @@ class StorageService:
         """Extract S3 key from URL."""
         endpoint = settings.effective_s3_endpoint
         if endpoint and endpoint in url:
-            return url.split(endpoint)[1].lstrip("/")
+            path = url.split(endpoint, 1)[1].lstrip("/")
+            bucket_prefix = f"{self.bucket}/"
+            if path.startswith(bucket_prefix):
+                return path.removeprefix(bucket_prefix)
+            return path
         if f"{self.bucket}.s3" in url:
-            parts = url.split(".s3.")
-            if len(parts) > 1:
-                return parts[1].split("/", 1)[1] if "/" in parts[1] else None
+            parsed_url = urlparse(url)
+            return parsed_url.path.lstrip("/") or None
         return None
+
+    def _ensure_bucket_exists(self) -> None:
+        if not self.bucket:
+            return
+        try:
+            self.s3_client.head_bucket(Bucket=self.bucket)
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code")
+            if error_code not in {"404", "NoSuchBucket", "NotFound"}:
+                raise
+            create_kwargs: dict[str, object] = {"Bucket": self.bucket}
+            if settings.S3_REGION != "us-east-1" and not settings.effective_s3_endpoint:
+                create_kwargs["CreateBucketConfiguration"] = {
+                    "LocationConstraint": settings.S3_REGION
+                }
+            self.s3_client.create_bucket(**create_kwargs)
 
     def _detect_content_type(self, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
