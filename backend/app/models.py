@@ -93,13 +93,14 @@ class EventUpdate(SQLModel):
 
 
 class Event(EventBase, table=True):
+    __tablename__ = "events"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
     created_by_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
     creator: Optional["User"] = Relationship(
         back_populates="created_events",
@@ -126,13 +127,14 @@ class EventsPublic(SQLModel):
 # ============ Event Member Models ============
 
 class EventMember(SQLModel, table=True):
+    __tablename__ = "event_members"
     __table_args__ = ({"schema": "public"})  # Ensure composite PK works properly
 
     event_id: uuid.UUID = Field(
-        foreign_key="event.id", nullable=False, ondelete="CASCADE", primary_key=True
+        foreign_key="events.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE", primary_key=True
+        foreign_key="users.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     joined_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -187,19 +189,20 @@ class ExpenseUpdate(SQLModel):
 
 
 class Expense(ExpenseBase, table=True):
+    __tablename__ = "expenses"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
     created_by_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
     event_id: uuid.UUID = Field(
-        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+        foreign_key="events.id", nullable=False, ondelete="CASCADE"
     )
     payer_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
     event: Optional["Event"] = Relationship(back_populates="expenses")
     creator: Optional["User"] = Relationship(
@@ -221,11 +224,12 @@ class ExpensePublic(ExpenseBase):
 
 
 class ExpenseSplit(SQLModel, table=True):
+    __tablename__ = "expense_splits"
     expense_id: uuid.UUID = Field(
-        foreign_key="expense.id", nullable=False, ondelete="CASCADE", primary_key=True
+        foreign_key="expenses.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE", primary_key=True
+        foreign_key="users.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     amount_owed: int = Field(gt=0)
     expense: Optional["Expense"] = Relationship(back_populates="splits")
@@ -315,15 +319,16 @@ class SettlementCreate(SQLModel):
 
 
 class Settlement(SettlementBase, table=True):
+    __tablename__ = "settlements"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     event_id: uuid.UUID = Field(
-        foreign_key="event.id", nullable=False, ondelete="CASCADE"
+        foreign_key="events.id", nullable=False, ondelete="CASCADE"
     )
     from_user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
     to_user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
     amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
@@ -359,12 +364,12 @@ class SettlementsPublic(SQLModel):
 # ============ Invite Models ============
 
 class InviteCode(SQLModel, table=True):
-    __tablename__ = "invite_code"
+    __tablename__ = "invite_codes"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    event_id: uuid.UUID = Field(foreign_key="event.id", nullable=False, ondelete="CASCADE")
+    event_id: uuid.UUID = Field(foreign_key="events.id", nullable=False, ondelete="CASCADE")
     code: str = Field(unique=True, index=True, max_length=20)
-    created_by_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    created_by_id: uuid.UUID = Field(foreign_key="users.id", nullable=False)
     expires_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     max_uses: int | None = Field(default=None)
     use_count: int = Field(default=0)

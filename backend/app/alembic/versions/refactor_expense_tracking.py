@@ -27,13 +27,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Drop all existing tables (development only - acceptable data loss)
+    # Drop stale singular tables created by initial_data.py / SQLModel create_all
     op.execute("DROP TABLE IF EXISTS expense_splits CASCADE")
     op.execute("DROP TABLE IF EXISTS expenses CASCADE")
     op.execute("DROP TABLE IF EXISTS settlements CASCADE")
     op.execute("DROP TABLE IF EXISTS event_members CASCADE")
     op.execute("DROP TABLE IF EXISTS events CASCADE")
     op.execute("DROP TABLE IF EXISTS users CASCADE")
+
+    # Drop stale singular tables (created by SQLModel default naming before migration)
+    op.execute("DROP TABLE IF EXISTS expensesplit CASCADE")
+    op.execute("DROP TABLE IF EXISTS expense CASCADE")
+    op.execute("DROP TABLE IF EXISTS eventmember CASCADE")
+    op.execute("DROP TABLE IF EXISTS event CASCADE")
+    op.execute("DROP TABLE IF EXISTS user CASCADE")
 
     # Create users table
     op.create_table(
