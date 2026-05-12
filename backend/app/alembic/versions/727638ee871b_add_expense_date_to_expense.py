@@ -22,4 +22,4 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_column('expense', 'expense_date')
+    op.drop_column('expenses', 'expense_date')
