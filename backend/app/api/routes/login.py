@@ -1,12 +1,12 @@
 from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app import crud
-from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
+from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser, limiter
 from app.core import security
 from app.core.config import settings
 from app.models import (
@@ -31,7 +31,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserPublic)
-def register_user(session: SessionDep, user_in: UserRegister) -> Any:
+@limiter.limit("3/hour")
+def register_user(request: Request, session: SessionDep, user_in: UserRegister) -> Any:
     """
     Register a new user.
     """
@@ -47,8 +48,9 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit("5/minute")
 def login(
-    session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
+    request: Request, session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Token:
     """
     OAuth2 compatible token login, get an access token and refresh token for future requests

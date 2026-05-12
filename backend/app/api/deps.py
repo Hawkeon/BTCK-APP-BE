@@ -2,10 +2,12 @@ from collections.abc import Generator
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlmodel import Session
 
 from app.core import security
@@ -16,6 +18,8 @@ from app.models import TokenPayload, User
 reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login"
 )
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
 
 
 def get_db() -> Generator[Session, None, None]:

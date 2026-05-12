@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -219,6 +219,44 @@ def test_update_user_me(
     assert user_db
     assert user_db.email == email
     assert user_db.full_name == full_name
+
+
+def test_upload_avatar(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    avatar_url = "http://minio:9000/billsplit/avatars/avatar.png"
+    with patch(
+        "app.services.storage.storage_service.upload_image",
+        new=AsyncMock(return_value=avatar_url),
+    ) as upload_image:
+        r = client.post(
+            f"{settings.API_V1_STR}/users/me/avatar",
+            headers=normal_user_token_headers,
+            files={"file": ("avatar.png", b"image-content", "image/png")},
+        )
+
+    assert r.status_code == 200
+    updated_user = r.json()
+    assert updated_user["avatar_url"] == avatar_url
+    upload_image.assert_awaited_once_with(b"image-content", "avatar.png", "avatars")
+
+    user_query = select(User).where(User.email == updated_user["email"])
+    user_db = db.exec(user_query).first()
+    assert user_db
+    assert user_db.avatar_url == avatar_url
+
+
+def test_upload_avatar_invalid_file_type(
+    client: TestClient, normal_user_token_headers: dict[str, str]
+) -> None:
+    r = client.post(
+        f"{settings.API_V1_STR}/users/me/avatar",
+        headers=normal_user_token_headers,
+        files={"file": ("avatar.txt", b"not-image", "text/plain")},
+    )
+
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Invalid file type. Allowed: JPEG, PNG, GIF, WebP"
 
 
 def test_update_password_me(
