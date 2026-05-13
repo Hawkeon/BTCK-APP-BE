@@ -1,4 +1,5 @@
 import logging
+
 from sqlmodel import Session, select
 
 from app import crud
@@ -13,9 +14,6 @@ logger = logging.getLogger(__name__)
 def init() -> None:
     """Create initial admin user if not exists."""
     with Session(engine) as session:
-        from sqlmodel import SQLModel
-        SQLModel.metadata.create_all(engine)
-
         user = session.exec(
             select(User).where(User.email == settings.FIRST_SUPERUSER)
         ).first()
