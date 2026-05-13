@@ -3,41 +3,34 @@ from datetime import date
 from typing import Any
 
 from sqlalchemy import desc
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
-    AddMemberByEmailRequest,
     Event,
     EventBalances,
     EventCreate,
     EventMember,
-    EventMemberPublic,
-    EventPublic,
+    EventStats,
     EventUpdate,
     Expense,
     ExpenseCreate,
-    ExpensePublic,
     ExpenseSplit,
-    ExpenseSplitCreate,
-    ExpenseSplitPublic,
     ExpenseUpdate,
     InviteCode,
-    InviteCodeCreate,
     MyBalanceDetail,
     MyBalanceSummary,
     Settlement,
     SettlementCreate,
     SimplifiedDebt,
     SimplifiedDebtsResponse,
-    EventStats,
     User,
     UserBalance,
     UserCreate,
     UserUpdate,
     get_datetime_utc,
 )
-
 
 # Dummy hash for timing attack prevention when user not found
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
@@ -123,6 +116,7 @@ def get_events(*, session: Session, user_id: uuid.UUID, skip: int = 0, limit: in
         .where(EventMember.user_id == user_id)
         .offset(skip)
         .limit(limit)
+        .options(selectinload(Event.members), selectinload(Event.expenses))
     )
     return session.exec(statement).all()
 
@@ -259,6 +253,7 @@ def get_expenses(*, session: Session, event_id: uuid.UUID, skip: int = 0, limit:
         .offset(skip)
         .limit(limit)
         .order_by(desc(Expense.expense_date), desc(Expense.created_at))
+        .options(selectinload(Expense.payer), selectinload(Expense.splits).selectinload(ExpenseSplit.user))
     )
     return session.exec(statement).all()
 
@@ -293,10 +288,10 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
     expenses = get_expenses(session=session, event_id=event_id)
     settlements = get_settlements(session=session, event_id=event_id)
 
-    paid = {uid: 0 for uid in member_ids}
-    owed = {uid: 0 for uid in member_ids}
-    settled_from = {uid: 0 for uid in member_ids}
-    settled_to = {uid: 0 for uid in member_ids}
+    paid = dict.fromkeys(member_ids, 0)
+    owed = dict.fromkeys(member_ids, 0)
+    settled_from = dict.fromkeys(member_ids, 0)
+    settled_to = dict.fromkeys(member_ids, 0)
 
     for exp in expenses:
         paid[exp.payer_id] = paid.get(exp.payer_id, 0) + exp.amount
@@ -386,6 +381,7 @@ def get_settlements(
         .offset(skip)
         .limit(limit)
         .order_by(Settlement.created_at.desc())
+        .options(selectinload(Settlement.from_user), selectinload(Settlement.to_user))
     )
     return session.exec(statement).all()
 

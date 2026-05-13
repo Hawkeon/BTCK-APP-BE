@@ -11,29 +11,27 @@ from app.models import (
     EventMemberPublic,
     EventPublic,
     EventsPublic,
+    EventStats,
     InviteCodeCreate,
     InviteCodePublic,
     Message,
     MyBalanceDetail,
     SimplifiedDebtsResponse,
-    EventStats,
     User,
 )
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-def event_to_public(event, session) -> EventPublic:
-    members = crud.get_event_members(session=session, event_id=event.id)
-    expenses = crud.get_expenses(session=session, event_id=event.id)
+def event_to_public(event, _session: SessionDep) -> EventPublic:
     return EventPublic(
         id=event.id,
         name=event.name,
         description=event.description,
         created_by_id=event.created_by_id,
         created_at=event.created_at,
-        member_count=len(members),
-        expense_count=len(expenses)
+        member_count=len(event.members),
+        expense_count=len(event.expenses)
     )
 
 

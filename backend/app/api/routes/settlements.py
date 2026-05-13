@@ -10,15 +10,14 @@ from app.models import (
     SettlementCreate,
     SettlementPublic,
     SettlementsPublic,
-    User,
 )
 
 router = APIRouter(prefix="/events/{event_id}/settlements", tags=["settlements"])
 
 
-def settlement_to_public(settlement: Settlement, session) -> SettlementPublic:
-    from_user = session.get(User, settlement.from_user_id)
-    to_user = session.get(User, settlement.to_user_id)
+def settlement_to_public(settlement: Settlement, _session: SessionDep) -> SettlementPublic:
+    from_user = settlement.from_user
+    to_user = settlement.to_user
     return SettlementPublic(
         id=settlement.id,
         event_id=settlement.event_id,
