@@ -57,12 +57,26 @@ class User(UserBase, table=True):
     created_events: list["Event"] = Relationship(
         back_populates="creator",
         cascade_delete=True,
-        sa_relationship_kwargs={"foreign_keys": "[Event.created_by_id]"}
+        sa_relationship_kwargs={
+            "foreign_keys": "[Event.created_by_id]",
+            "primaryjoin": "User.id == Event.created_by_id",
+        },
     )
-    memberships: list["EventMember"] = Relationship(back_populates="user", cascade_delete=True)
+    memberships: list["EventMember"] = Relationship(
+        back_populates="user",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[EventMember.user_id]",
+            "primaryjoin": "User.id == EventMember.user_id",
+        },
+    )
     expense_splits: list["ExpenseSplit"] = Relationship(
         back_populates="user",
-        sa_relationship_kwargs={"foreign_keys": "[ExpenseSplit.user_id]"}
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[ExpenseSplit.user_id]",
+            "primaryjoin": "User.id == ExpenseSplit.user_id",
+        },
     )
 
 
@@ -104,11 +118,35 @@ class Event(EventBase, table=True):
     )
     creator: Optional["User"] = Relationship(
         back_populates="created_events",
-        sa_relationship_kwargs={"foreign_keys": "[Event.created_by_id]"}
+        sa_relationship_kwargs={
+            "foreign_keys": "[Event.created_by_id]",
+            "primaryjoin": "Event.created_by_id == User.id",
+        },
     )
-    members: list["EventMember"] = Relationship(back_populates="event", cascade_delete=True)
-    expenses: list["Expense"] = Relationship(back_populates="event", cascade_delete=True)
-    settlements: list["Settlement"] = Relationship(back_populates="event", cascade_delete=True)
+    members: list["EventMember"] = Relationship(
+        back_populates="event",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[EventMember.event_id]",
+            "primaryjoin": "Event.id == EventMember.event_id",
+        },
+    )
+    expenses: list["Expense"] = Relationship(
+        back_populates="event",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[Expense.event_id]",
+            "primaryjoin": "Event.id == Expense.event_id",
+        },
+    )
+    settlements: list["Settlement"] = Relationship(
+        back_populates="event",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[Settlement.event_id]",
+            "primaryjoin": "Event.id == Settlement.event_id",
+        },
+    )
 
 
 class EventPublic(EventBase):
@@ -140,8 +178,20 @@ class EventMember(SQLModel, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    event: Optional["Event"] = Relationship(back_populates="members")
-    user: Optional["User"] = Relationship(back_populates="memberships")
+    event: Optional["Event"] = Relationship(
+        back_populates="members",
+        sa_relationship_kwargs={
+            "foreign_keys": "[EventMember.event_id]",
+            "primaryjoin": "EventMember.event_id == Event.id",
+        },
+    )
+    user: Optional["User"] = Relationship(
+        back_populates="memberships",
+        sa_relationship_kwargs={
+            "foreign_keys": "[EventMember.user_id]",
+            "primaryjoin": "EventMember.user_id == User.id",
+        },
+    )
 
 
 class EventMemberPublic(SQLModel):
@@ -204,12 +254,30 @@ class Expense(ExpenseBase, table=True):
     payer_id: uuid.UUID = Field(
         foreign_key="users.id", nullable=False, ondelete="CASCADE"
     )
-    event: Optional["Event"] = Relationship(back_populates="expenses")
-    creator: Optional["User"] = Relationship(
-        sa_relationship_kwargs={"foreign_keys": "[Expense.created_by_id]"}
+    event: Optional["Event"] = Relationship(
+        back_populates="expenses",
+        sa_relationship_kwargs={"foreign_keys": "[Expense.event_id]"},
     )
-    payer: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Expense.payer_id]"})
-    splits: list["ExpenseSplit"] = Relationship(back_populates="expense", cascade_delete=True)
+    creator: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Expense.created_by_id]",
+            "primaryjoin": "Expense.created_by_id == User.id",
+        },
+    )
+    payer: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Expense.payer_id]",
+            "primaryjoin": "Expense.payer_id == User.id",
+        },
+    )
+    splits: list["ExpenseSplit"] = Relationship(
+        back_populates="expense",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "foreign_keys": "[ExpenseSplit.expense_id]",
+            "primaryjoin": "Expense.id == ExpenseSplit.expense_id",
+        },
+    )
 
 
 class ExpensePublic(ExpenseBase):
@@ -232,8 +300,20 @@ class ExpenseSplit(SQLModel, table=True):
         foreign_key="users.id", nullable=False, ondelete="CASCADE", primary_key=True
     )
     amount_owed: int = Field(gt=0)
-    expense: Optional["Expense"] = Relationship(back_populates="splits")
-    user: Optional["User"] = Relationship(back_populates="expense_splits")
+    expense: Optional["Expense"] = Relationship(
+        back_populates="splits",
+        sa_relationship_kwargs={
+            "foreign_keys": "[ExpenseSplit.expense_id]",
+            "primaryjoin": "ExpenseSplit.expense_id == Expense.id",
+        },
+    )
+    user: Optional["User"] = Relationship(
+        back_populates="expense_splits",
+        sa_relationship_kwargs={
+            "foreign_keys": "[ExpenseSplit.user_id]",
+            "primaryjoin": "ExpenseSplit.user_id == User.id",
+        },
+    )
 
 
 class ExpenseSplitPublic(SQLModel):
@@ -336,9 +416,25 @@ class Settlement(SettlementBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    event: Optional["Event"] = Relationship(back_populates="settlements")
-    from_user: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Settlement.from_user_id]"})
-    to_user: Optional["User"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[Settlement.to_user_id]"})
+    event: Optional["Event"] = Relationship(
+        back_populates="settlements",
+        sa_relationship_kwargs={
+            "foreign_keys": "[Settlement.event_id]",
+            "primaryjoin": "Settlement.event_id == Event.id",
+        },
+    )
+    from_user: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Settlement.from_user_id]",
+            "primaryjoin": "Settlement.from_user_id == User.id",
+        },
+    )
+    to_user: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Settlement.to_user_id]",
+            "primaryjoin": "Settlement.to_user_id == User.id",
+        },
+    )
 
 
 class SettlementPublic(SettlementBase):
@@ -377,8 +473,18 @@ class InviteCode(SQLModel, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
     )
-    event: Optional["Event"] = Relationship()
-    creator: Optional["User"] = Relationship()
+    event: Optional["Event"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[InviteCode.event_id]",
+            "primaryjoin": "InviteCode.event_id == Event.id",
+        },
+    )
+    creator: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[InviteCode.created_by_id]",
+            "primaryjoin": "InviteCode.created_by_id == User.id",
+        },
+    )
 
 
 class InviteCodeCreate(SQLModel):
