@@ -48,6 +48,7 @@ class UpdatePassword(SQLModel):
 
 
 class User(UserBase, table=True):
+    __tablename__ = "users"
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str
     created_at: datetime | None = Field(
