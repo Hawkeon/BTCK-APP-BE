@@ -29,6 +29,8 @@ from app.models import (
     UserBalance,
     UserCreate,
     UserUpdate,
+    Notification,
+    NotificationType,
     get_datetime_utc,
 )
 
@@ -542,3 +544,72 @@ def get_event_stats(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
         your_total_owed=user_balance.total_owed if user_balance else 0,
         your_net_balance=user_balance.net_balance if user_balance else 0,
     )
+
+
+# ============ Notification CRUD ============
+
+def create_notification(
+    *,
+    session: Session,
+    recipient_id: uuid.UUID,
+    title: str,
+    content: str,
+    type: NotificationType,
+    sender_id: uuid.UUID | None = None,
+    event_id: uuid.UUID | None = None,
+    reference_id: uuid.UUID | None = None
+) -> Notification:
+    db_obj = Notification(
+        recipient_id=recipient_id,
+        sender_id=sender_id,
+        event_id=event_id,
+        title=title,
+        content=content,
+        type=type,
+        reference_id=reference_id
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def get_notifications(*, session: Session, recipient_id: uuid.UUID, skip: int = 0, limit: int = 100) -> list[Notification]:
+    statement = (
+        select(Notification)
+        .where(Notification.recipient_id == recipient_id)
+        .offset(skip)
+        .limit(limit)
+        .order_by(desc(Notification.created_at))
+    )
+    return session.exec(statement).all()
+
+
+def get_notification(*, session: Session, notification_id: uuid.UUID, recipient_id: uuid.UUID) -> Notification | None:
+    statement = select(Notification).where(
+        Notification.id == notification_id,
+        Notification.recipient_id == recipient_id
+    )
+    return session.exec(statement).first()
+
+
+def mark_notification_as_read(*, session: Session, db_obj: Notification) -> Notification:
+    db_obj.is_read = True
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def mark_all_notifications_as_read(*, session: Session, recipient_id: uuid.UUID) -> int:
+    from sqlmodel import update
+    statement = select(Notification).where(
+        Notification.recipient_id == recipient_id,
+        Notification.is_read == False
+    )
+    notifications = session.exec(statement).all()
+    for n in notifications:
+        n.is_read = True
+        session.add(n)
+    session.commit()
+    return len(notifications)

@@ -1,4 +1,5 @@
 import uuid
+from enum import Enum
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -528,3 +529,56 @@ class EventStats(SQLModel):
     your_total_paid: int
     your_total_owed: int
     your_net_balance: int
+
+
+# ============ Notification Models ============
+
+class NotificationType(str, Enum):
+    EXPENSE_CREATED = "EXPENSE_CREATED"
+    MEMBER_ADDED = "MEMBER_ADDED"
+    SETTLEMENT_RECORDED = "SETTLEMENT_RECORDED"
+
+
+class NotificationBase(SQLModel):
+    title: str = Field(max_length=255)
+    content: str
+    type: NotificationType
+    event_id: uuid.UUID | None = Field(default=None, foreign_key="events.id")
+    reference_id: uuid.UUID | None = Field(default=None)
+
+
+class Notification(NotificationBase, table=True):
+    __tablename__ = "notifications"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    recipient_id: uuid.UUID = Field(foreign_key="users.id", nullable=False, ondelete="CASCADE")
+    sender_id: uuid.UUID | None = Field(default=None, foreign_key="users.id", ondelete="SET NULL")
+    is_read: bool = Field(default=False)
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+
+    recipient: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Notification.recipient_id]",
+            "primaryjoin": "Notification.recipient_id == User.id",
+        }
+    )
+    sender: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Notification.sender_id]",
+            "primaryjoin": "Notification.sender_id == User.id",
+        }
+    )
+
+
+class NotificationPublic(NotificationBase):
+    id: uuid.UUID
+    sender_id: uuid.UUID | None
+    is_read: bool
+    created_at: datetime
+
+
+class NotificationsPublic(SQLModel):
+    data: list[NotificationPublic]
+    count: int

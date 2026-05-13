@@ -10,6 +10,7 @@ from app.models import (
     SettlementCreate,
     SettlementPublic,
     SettlementsPublic,
+    NotificationType,
 )
 
 router = APIRouter(prefix="/events/{event_id}/settlements", tags=["settlements"])
@@ -84,6 +85,20 @@ def create_settlement(
         settlement_in=settlement_in,
         event_id=event_id,
     )
+
+    # Send notification to the recipient
+    event = session.get(crud.Event, event_id)
+    crud.create_notification(
+        session=session,
+        recipient_id=settlement.to_user_id,
+        sender_id=current_user.id,
+        event_id=event_id,
+        title="Thanh toán nợ",
+        content=f"{current_user.full_name or current_user.email} đã gửi cho bạn {settlement.amount:,}đ trong nhóm '{event.name if event else ''}'",
+        type=NotificationType.SETTLEMENT_RECORDED,
+        reference_id=settlement.id
+    )
+
     return settlement_to_public(settlement, session)
 
 

@@ -12,6 +12,7 @@ from app.models import (
     ExpensesPublic,
     ExpenseUpdate,
     Message,
+    NotificationType,
 )
 
 router = APIRouter(prefix="/events/{event_id}/expenses", tags=["expenses"])
@@ -100,6 +101,23 @@ def create_expense(
         event_id=event_id,
         created_by_id=current_user.id,
     )
+
+    # Send notifications to other members
+    members = crud.get_event_members(session=session, event_id=event_id)
+    event = session.get(crud.Event, event_id)
+    for member in members:
+        if member.user_id != current_user.id:
+            crud.create_notification(
+                session=session,
+                recipient_id=member.user_id,
+                sender_id=current_user.id,
+                event_id=event_id,
+                title="Khoản chi mới",
+                content=f"{current_user.full_name or current_user.email} đã thêm khoản chi '{expense.description}' {expense.amount:,}đ trong nhóm '{event.name if event else ''}'",
+                type=NotificationType.EXPENSE_CREATED,
+                reference_id=expense.id
+            )
+
     return expense_to_public(expense, session)
 
 

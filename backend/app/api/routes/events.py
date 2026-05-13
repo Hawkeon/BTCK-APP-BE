@@ -18,6 +18,7 @@ from app.models import (
     MyBalanceDetail,
     SimplifiedDebtsResponse,
     User,
+    NotificationType,
 )
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -125,6 +126,19 @@ def add_member_by_email(
 
     # Add member
     member = crud.add_member_by_user_id(session=session, event_id=event_id, user_id=user.id)
+
+    # Send notification to the added member
+    crud.create_notification(
+        session=session,
+        recipient_id=user.id,
+        sender_id=current_user.id,
+        event_id=event_id,
+        title="Bạn đã được thêm vào nhóm",
+        content=f"{current_user.full_name or current_user.email} đã thêm bạn vào nhóm '{event.name}'",
+        type=NotificationType.MEMBER_ADDED,
+        reference_id=event_id
+    )
+
     return EventMemberPublic(
         event_id=event_id,
         user_id=user.id,
@@ -255,6 +269,18 @@ def join_event_by_code(
     crud.use_invite_code(session=session, code=code)
     member = crud.add_member_by_user_id(session=session, event_id=invite.event_id, user_id=current_user.id)
     user = session.get(User, current_user.id)
+    db_event = session.get(crud.Event, invite.event_id)
+
+    # Send welcome notification
+    crud.create_notification(
+        session=session,
+        recipient_id=current_user.id,
+        event_id=invite.event_id,
+        title="Tham gia nhóm thành công",
+        content=f"Bạn đã tham gia nhóm '{db_event.name if db_event else 'mới'}' thành công",
+        type=NotificationType.MEMBER_ADDED,
+        reference_id=invite.event_id
+    )
 
     return EventMemberPublic(
         event_id=invite.event_id,
