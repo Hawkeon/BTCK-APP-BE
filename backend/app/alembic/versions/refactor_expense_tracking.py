@@ -40,7 +40,7 @@ def upgrade() -> None:
     op.execute("DROP TABLE IF EXISTS expense CASCADE")
     op.execute("DROP TABLE IF EXISTS eventmember CASCADE")
     op.execute("DROP TABLE IF EXISTS event CASCADE")
-    op.execute("DROP TABLE IF EXISTS user CASCADE")
+    op.execute('DROP TABLE IF EXISTS "user" CASCADE')
 
     # Create users table
     op.create_table(
