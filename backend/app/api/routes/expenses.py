@@ -1,8 +1,7 @@
 import os
 import uuid
-from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app import crud
 from app.api.deps import CurrentUser, SessionDep
@@ -10,27 +9,26 @@ from app.models import (
     ExpenseCreate,
     ExpensePublic,
     ExpenseSplitPublic,
-    ExpenseUpdate,
     ExpensesPublic,
+    ExpenseUpdate,
     Message,
-    User,
 )
 
 router = APIRouter(prefix="/events/{event_id}/expenses", tags=["expenses"])
 
 
-def expense_to_public(expense, session) -> ExpensePublic:
-    payer = session.get(User, expense.payer_id)
-    splits = []
-    for s in expense.splits:
-        user = session.get(User, s.user_id)
-        splits.append(ExpenseSplitPublic(
+def expense_to_public(expense, _session: SessionDep) -> ExpensePublic:
+    payer = expense.payer
+    splits = [
+        ExpenseSplitPublic(
             user_id=s.user_id,
             amount_owed=s.amount_owed,
-            user_email=user.email if user else None,
-            user_full_name=user.full_name if user else None,
-            user_qr_code_url=user.qr_code_url if user else None,
-        ))
+            user_email=s.user.email if s.user else None,
+            user_full_name=s.user.full_name if s.user else None,
+            user_qr_code_url=s.user.qr_code_url if s.user else None,
+        )
+        for s in expense.splits
+    ]
     return ExpensePublic(
         id=expense.id,
         description=expense.description,
