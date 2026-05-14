@@ -29,6 +29,7 @@ from app.models import (
     UserBalance,
     UserCreate,
     UserUpdate,
+    UserFCMToken,
     Notification,
     NotificationType,
     get_datetime_utc,
@@ -572,6 +573,26 @@ def create_notification(
     session.add(db_obj)
     session.commit()
     session.refresh(db_obj)
+
+    # Trigger FCM Push
+    try:
+        from app.services.fcm import fcm_service
+        token_statement = select(UserFCMToken).where(UserFCMToken.user_id == recipient_id)
+        tokens = [t.fcm_token for t in session.exec(token_statement).all()]
+        if tokens:
+            fcm_service.send_push(
+                tokens=tokens,
+                title=title,
+                body=content,
+                data={
+                    "type": type.value,
+                    "event_id": str(event_id) if event_id else "",
+                    "reference_id": str(reference_id) if reference_id else ""
+                }
+            )
+    except Exception as e:
+        print(f"Error triggering FCM push: {e}")
+
     return db_obj
 
 
