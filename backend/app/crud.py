@@ -33,6 +33,7 @@ from app.models import (
     NotificationType,
     get_datetime_utc,
 )
+from app.services.qr import generate_vietqr_url
 
 # Dummy hash for timing attack prevention when user not found
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
@@ -317,6 +318,9 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
                 user_email=user.email,
                 user_full_name=user.full_name,
                 user_qr_code_url=user.qr_code_url,
+                bank_name=user.bank_name,
+                account_number=user.account_number,
+                account_holder=user.account_holder,
                 total_paid=paid.get(uid, 0),
                 total_owed=owed.get(uid, 0),
                 net_balance=net_balance
