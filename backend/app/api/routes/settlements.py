@@ -29,10 +29,8 @@ def settlement_to_public(settlement: Settlement, _session: SessionDep) -> Settle
         created_at=settlement.created_at,
         from_user_email=from_user.email if from_user else None,
         from_user_full_name=from_user.full_name if from_user else None,
-        from_user_qr_code_url=from_user.qr_code_url if from_user else None,
         to_user_email=to_user.email if to_user else None,
         to_user_full_name=to_user.full_name if to_user else None,
-        to_user_qr_code_url=to_user.qr_code_url if to_user else None,
     )
 
 

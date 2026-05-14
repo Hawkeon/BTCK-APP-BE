@@ -145,7 +145,6 @@ def add_member_by_email(
         joined_at=member.joined_at,
         user_email=user.email,
         user_full_name=user.full_name,
-        user_qr_code_url=user.qr_code_url,
     )
 
 
@@ -262,7 +261,6 @@ def join_event_by_code(
                     joined_at=m.joined_at,
                     user_email=user.email if user else None,
                     user_full_name=user.full_name if user else None,
-                    user_qr_code_url=user.qr_code_url if user else None,
                 )
 
     # Add user to event
@@ -288,5 +286,4 @@ def join_event_by_code(
         joined_at=member.joined_at,
         user_email=user.email if user else None,
         user_full_name=user.full_name if user else None,
-        user_qr_code_url=user.qr_code_url if user else None,
     )
