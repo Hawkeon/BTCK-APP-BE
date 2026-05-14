@@ -19,7 +19,9 @@ class UserBase(SQLModel):
     is_active: bool = True
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
-    qr_code_url: str | None = Field(default=None, max_length=500, nullable=True)
+    bank_name: str | None = Field(default=None, max_length=50)
+    account_number: str | None = Field(default=None, max_length=50)
+    account_holder: str | None = Field(default=None, max_length=255)
     avatar_url: str | None = Field(default=None, max_length=500, nullable=True)
 
 
@@ -41,6 +43,9 @@ class UserUpdate(UserBase):
 class UserUpdateMe(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
     email: EmailStr | None = Field(default=None, max_length=255)
+    bank_name: str | None = Field(default=None, max_length=50)
+    account_number: str | None = Field(default=None, max_length=50)
+    account_holder: str | None = Field(default=None, max_length=255)
 
 
 class UpdatePassword(SQLModel):
@@ -202,7 +207,6 @@ class EventMemberPublic(SQLModel):
     joined_at: datetime | None = None
     user_email: str | None = None
     user_full_name: str | None = None
-    user_qr_code_url: str | None = None
 
 
 class AddMemberByEmailRequest(SQLModel):
@@ -323,7 +327,6 @@ class ExpenseSplitPublic(SQLModel):
     amount_owed: int
     user_email: str | None = None
     user_full_name: str | None = None
-    user_qr_code_url: str | None = None
 
 
 class ExpensesPublic(SQLModel):
@@ -337,7 +340,9 @@ class UserBalance(SQLModel):
     user_id: uuid.UUID
     user_email: str
     user_full_name: str | None
-    user_qr_code_url: str | None = None
+    bank_name: str | None = None
+    account_number: str | None = None
+    account_holder: str | None = None
     total_paid: int
     total_owed: int
     net_balance: int  # positive = others owe user, negative = user owes
@@ -448,10 +453,7 @@ class SettlementPublic(SettlementBase):
     created_at: datetime | None = None
     from_user_email: str | None = None
     from_user_full_name: str | None = None
-    from_user_qr_code_url: str | None = None
-    to_user_email: str | None = None
     to_user_full_name: str | None = None
-    to_user_qr_code_url: str | None = None
 
 
 class SettlementsPublic(SQLModel):
@@ -510,7 +512,6 @@ class SimplifiedDebt(SQLModel):
     to_user_id: uuid.UUID
     to_user_email: str
     to_user_full: str | None
-    to_user_qr_code_url: str | None
     amount: int
 
 
