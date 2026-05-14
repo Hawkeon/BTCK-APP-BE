@@ -317,7 +317,6 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
                 user_id=uid,
                 user_email=user.email,
                 user_full_name=user.full_name,
-                user_qr_code_url=user.qr_code_url,
                 bank_name=user.bank_name,
                 account_number=user.account_number,
                 account_holder=user.account_holder,
@@ -507,8 +506,6 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
                     from_user_full_name=debtor.user_full_name,
                     to_user_id=creditor_id,
                     to_user_email=creditor.user_email,
-                    to_user_full=creditor.user_full_name,
-                    to_user_qr_code_url=creditor.user_qr_code_url,
                     amount=settle_amount
                 ))
 

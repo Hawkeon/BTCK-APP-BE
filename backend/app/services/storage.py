@@ -51,8 +51,9 @@ class StorageService:
                     Body=file_content,
                     ContentType=self._detect_content_type(filename),
                 )
-                if settings.effective_s3_endpoint:
-                    return f"{settings.effective_s3_endpoint}/{self.bucket}/{key}"
+                public_endpoint = settings.effective_s3_public_url
+                if public_endpoint:
+                    return f"{public_endpoint}/{self.bucket}/{key}"
                 return f"https://{self.bucket}.s3.{settings.S3_REGION}.amazonaws.com/{key}"
             except ClientError as e:
                 raise ValueError(f"Failed to upload to S3: {e}")
@@ -118,6 +119,25 @@ class StorageService:
                     "LocationConstraint": settings.S3_REGION
                 }
             self.s3_client.create_bucket(**create_kwargs)
+        
+        # Always ensure bucket policy is public read (especially for MinIO/Local dev)
+        try:
+            import json
+            policy = {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "PublicRead",
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": ["s3:GetObject"],
+                        "Resource": [f"arn:aws:s3:::{self.bucket}/*"]
+                    }
+                ]
+            }
+            self.s3_client.put_bucket_policy(Bucket=self.bucket, Policy=json.dumps(policy))
+        except Exception as e:
+            print(f"Warning: Failed to set bucket policy: {e}")
 
     def _detect_content_type(self, filename: str) -> str:
         ext = filename.lower().split(".")[-1] if "." in filename else ""

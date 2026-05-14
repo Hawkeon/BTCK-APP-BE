@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str | None = None
     S3_BUCKET: str | None = None
     S3_ENDPOINT_URL: str | None = None
+    S3_PUBLIC_URL: str | None = None
     S3_REGION: str = "us-east-1"
 
     # MinIO-specific aliases (for local development)
@@ -112,6 +113,11 @@ class Settings(BaseSettings):
     @property
     def effective_s3_endpoint(self) -> str | None:
         return self.S3_ENDPOINT_URL or self.MINIO_ENDPOINT
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_s3_public_url(self) -> str | None:
+        return self.S3_PUBLIC_URL or self.effective_s3_endpoint
 
     @computed_field  # type: ignore[prop-decorator]
     @property
