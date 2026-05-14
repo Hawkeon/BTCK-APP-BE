@@ -27,6 +27,8 @@ from app.models import (
     UsersPublic,
     UserUpdate,
     UserUpdateMe,
+    UserFCMToken,
+    FCMTokenCreate,
 )
 from app.utils import generate_new_account_email, send_email
 from app.services.qr import generate_vietqr_url
@@ -128,6 +130,44 @@ async def upload_avatar(
     session.commit()
     session.refresh(current_user)
     return current_user
+
+
+@router.post("/me/fcm-token", response_model=Message)
+async def register_fcm_token(
+    *, session: SessionDep, current_user: CurrentUser, token_in: FCMTokenCreate
+) -> Any:
+    """Register or update an FCM token for the current user."""
+    # Check if token already exists for this user
+    statement = select(UserFCMToken).where(
+        UserFCMToken.user_id == current_user.id,
+        UserFCMToken.fcm_token == token_in.fcm_token
+    )
+    existing_token = session.exec(statement).first()
+    
+    if not existing_token:
+        new_token = UserFCMToken(
+            user_id=current_user.id,
+            fcm_token=token_in.fcm_token,
+            device_type=token_in.device_type
+        )
+        session.add(new_token)
+        session.commit()
+    
+    return Message(message="FCM token registered successfully")
+
+
+@router.delete("/me/fcm-token/{token}", response_model=Message)
+async def unregister_fcm_token(
+    *, session: SessionDep, current_user: CurrentUser, token: str
+) -> Any:
+    """Unregister an FCM token (e.g., on logout)."""
+    statement = delete(UserFCMToken).where(
+        UserFCMToken.user_id == current_user.id,
+        UserFCMToken.fcm_token == token
+    )
+    session.exec(statement)
+    session.commit()
+    return Message(message="FCM token unregistered successfully")
 
 
 @router.delete("/me", response_model=Message)

@@ -97,6 +97,24 @@ class UsersPublic(SQLModel):
     count: int
 
 
+# FCM Tokens
+class UserFCMToken(SQLModel, table=True):
+    __tablename__ = "user_fcm_tokens"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True, ondelete="CASCADE")
+    fcm_token: str = Field(index=True)
+    device_type: str | None = Field(default=None, max_length=50)  # e.g., "android", "ios"
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+
+
+class FCMTokenCreate(SQLModel):
+    fcm_token: str
+    device_type: str | None = None
+
+
 # ============ Event Models ============
 
 class EventBase(SQLModel):
