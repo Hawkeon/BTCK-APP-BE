@@ -42,7 +42,6 @@ class UserUpdate(UserBase):
 
 class UserUpdateMe(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
-    email: EmailStr | None = Field(default=None, max_length=255)
     bank_name: str | None = Field(default=None, max_length=50)
     account_number: str | None = Field(default=None, max_length=50)
     account_holder: str | None = Field(default=None, max_length=255)
