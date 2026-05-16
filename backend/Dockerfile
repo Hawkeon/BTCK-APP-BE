@@ -1,7 +1,7 @@
 # Bill Split Backend Dockerfile
 # Optimized for development with Docker Compose
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
