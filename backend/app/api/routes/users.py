@@ -66,10 +66,6 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
 @router.patch("/me", response_model=UserPublic)
 async def update_user_me(*, session: SessionDep, user_in: UserUpdateMe, current_user: CurrentUser) -> Any:
     """Update own user."""
-    if user_in.email:
-        existing_user = crud.get_user_by_email(session=session, email=user_in.email)
-        if existing_user and existing_user.id != current_user.id:
-            raise HTTPException(status_code=409, detail="User with this email already exists")
     if user_in.bank_name:
         if not await bank_service.is_valid_bank(user_in.bank_name):
             raise HTTPException(status_code=400, detail=f"Mã ngân hàng không hợp lệ: {user_in.bank_name}")
