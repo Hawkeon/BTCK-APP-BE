@@ -29,8 +29,12 @@ from app.models import (
     UserBalance,
     UserCreate,
     UserUpdate,
+    UserFCMToken,
+    Notification,
+    NotificationType,
     get_datetime_utc,
 )
+from app.services.qr import generate_vietqr_url
 
 # Dummy hash for timing attack prevention when user not found
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
@@ -307,14 +311,16 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
         user = users.get(uid)
         if user:
             net_before_settlements = paid.get(uid, 0) - owed.get(uid, 0)
-            net_from_settlements = settled_to.get(uid, 0) - settled_from.get(uid, 0)
+            net_from_settlements = settled_from.get(uid, 0) - settled_to.get(uid, 0)
             net_balance = net_before_settlements + net_from_settlements
 
             balances.append(UserBalance(
                 user_id=uid,
                 user_email=user.email,
                 user_full_name=user.full_name,
-                user_qr_code_url=user.qr_code_url,
+                bank_name=user.bank_name,
+                account_number=user.account_number,
+                account_holder=user.account_holder,
                 total_paid=paid.get(uid, 0),
                 total_owed=owed.get(uid, 0),
                 net_balance=net_balance
@@ -365,11 +371,21 @@ def create_settlement(
         to_user_id=settlement_in.to_user_id,
         amount=settlement_in.amount,
         note=settlement_in.note,
+        idempotency_key=settlement_in.idempotency_key,
     )
     session.add(db_obj)
     session.commit()
     session.refresh(db_obj)
     return db_obj
+
+
+def get_settlement_by_idempotency_key(
+    *, session: Session, idempotency_key: uuid.UUID
+) -> Settlement | None:
+    statement = select(Settlement).where(
+        Settlement.idempotency_key == idempotency_key
+    )
+    return session.exec(statement).first()
 
 
 def get_settlements(
@@ -501,8 +517,7 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
                     from_user_full_name=debtor.user_full_name,
                     to_user_id=creditor_id,
                     to_user_email=creditor.user_email,
-                    to_user_full=creditor.user_full_name,
-                    to_user_qr_code_url=creditor.user_qr_code_url,
+                    to_user_full_name=creditor.user_full_name,
                     amount=settle_amount
                 ))
 
@@ -542,3 +557,92 @@ def get_event_stats(*, session: Session, event_id: uuid.UUID, user_id: uuid.UUID
         your_total_owed=user_balance.total_owed if user_balance else 0,
         your_net_balance=user_balance.net_balance if user_balance else 0,
     )
+
+
+# ============ Notification CRUD ============
+
+def create_notification(
+    *,
+    session: Session,
+    recipient_id: uuid.UUID,
+    title: str,
+    content: str,
+    type: NotificationType,
+    sender_id: uuid.UUID | None = None,
+    event_id: uuid.UUID | None = None,
+    reference_id: uuid.UUID | None = None
+) -> Notification:
+    db_obj = Notification(
+        recipient_id=recipient_id,
+        sender_id=sender_id,
+        event_id=event_id,
+        title=title,
+        content=content,
+        type=type,
+        reference_id=reference_id
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+
+    # Trigger FCM Push
+    try:
+        from app.services.fcm import fcm_service
+        token_statement = select(UserFCMToken).where(UserFCMToken.user_id == recipient_id)
+        tokens = [t.fcm_token for t in session.exec(token_statement).all()]
+        if tokens:
+            fcm_service.send_push(
+                tokens=tokens,
+                title=title,
+                body=content,
+                data={
+                    "type": type.value,
+                    "event_id": str(event_id) if event_id else "",
+                    "reference_id": str(reference_id) if reference_id else ""
+                }
+            )
+    except Exception as e:
+        print(f"Error triggering FCM push: {e}")
+
+    return db_obj
+
+
+def get_notifications(*, session: Session, recipient_id: uuid.UUID, skip: int = 0, limit: int = 100) -> list[Notification]:
+    statement = (
+        select(Notification)
+        .where(Notification.recipient_id == recipient_id)
+        .offset(skip)
+        .limit(limit)
+        .order_by(desc(Notification.created_at))
+    )
+    return session.exec(statement).all()
+
+
+def get_notification(*, session: Session, notification_id: uuid.UUID, recipient_id: uuid.UUID) -> Notification | None:
+    statement = select(Notification).where(
+        Notification.id == notification_id,
+        Notification.recipient_id == recipient_id
+    )
+    return session.exec(statement).first()
+
+
+def mark_notification_as_read(*, session: Session, db_obj: Notification) -> Notification:
+    db_obj.is_read = True
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+    return db_obj
+
+
+def mark_all_notifications_as_read(*, session: Session, recipient_id: uuid.UUID) -> int:
+    from sqlmodel import update
+    statement = select(Notification).where(
+        Notification.recipient_id == recipient_id,
+        Notification.is_read == False
+    )
+    notifications = session.exec(statement).all()
+    for n in notifications:
+        n.is_read = True
+        session.add(n)
+    session.commit()
+    return len(notifications)

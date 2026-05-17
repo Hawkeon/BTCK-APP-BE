@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app import crud
 from app.api.deps import CurrentUser, SessionDep
@@ -10,6 +11,7 @@ from app.models import (
     SettlementCreate,
     SettlementPublic,
     SettlementsPublic,
+    NotificationType,
 )
 
 router = APIRouter(prefix="/events/{event_id}/settlements", tags=["settlements"])
@@ -25,13 +27,12 @@ def settlement_to_public(settlement: Settlement, _session: SessionDep) -> Settle
         to_user_id=settlement.to_user_id,
         amount=settlement.amount,
         note=settlement.note,
+        idempotency_key=settlement.idempotency_key,
         created_at=settlement.created_at,
         from_user_email=from_user.email if from_user else None,
         from_user_full_name=from_user.full_name if from_user else None,
-        from_user_qr_code_url=from_user.qr_code_url if from_user else None,
         to_user_email=to_user.email if to_user else None,
         to_user_full_name=to_user.full_name if to_user else None,
-        to_user_qr_code_url=to_user.qr_code_url if to_user else None,
     )
 
 
@@ -79,11 +80,60 @@ def create_settlement(
     if settlement_in.to_user_id not in member_ids:
         raise HTTPException(status_code=400, detail="to_user_id must be an event member")
 
-    settlement = crud.create_settlement(
-        session=session,
-        settlement_in=settlement_in,
-        event_id=event_id,
+    # Check for duplicate by idempotency_key
+    existing = crud.get_settlement_by_idempotency_key(
+        session=session, idempotency_key=settlement_in.idempotency_key
     )
+    if existing:
+        return settlement_to_public(existing, session)
+
+    # Validate amount against remaining debt
+    event = session.get(crud.Event, event_id)
+    simplified = crud.simplify_event_debts(session=session, event_id=event_id)
+    debt_to_creditor = next(
+        (d.amount for d in simplified.debts
+         if d.from_user_id == settlement_in.from_user_id
+         and d.to_user_id == settlement_in.to_user_id),
+        0,
+    )
+    if debt_to_creditor <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No debt owed to this user",
+        )
+    if settlement_in.amount > debt_to_creditor:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Settlement amount ({settlement_in.amount:,}) exceeds remaining debt ({debt_to_creditor:,})",
+        )
+
+    try:
+        settlement = crud.create_settlement(
+            session=session,
+            settlement_in=settlement_in,
+            event_id=event_id,
+        )
+    except IntegrityError:
+        session.rollback()
+        existing = crud.get_settlement_by_idempotency_key(
+            session=session, idempotency_key=settlement_in.idempotency_key
+        )
+        if existing:
+            return settlement_to_public(existing, session)
+        raise
+
+    # Send notification to the recipient
+    crud.create_notification(
+        session=session,
+        recipient_id=settlement.to_user_id,
+        sender_id=current_user.id,
+        event_id=event_id,
+        title="Thanh toán nợ",
+        content=f"{current_user.full_name or current_user.email} đã gửi cho bạn {settlement.amount:,}đ trong nhóm '{event.name if event else ''}'",
+        type=NotificationType.SETTLEMENT_RECORDED,
+        reference_id=settlement.id
+    )
+
     return settlement_to_public(settlement, session)
 
 

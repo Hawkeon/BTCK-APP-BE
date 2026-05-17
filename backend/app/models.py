@@ -1,4 +1,5 @@
 import uuid
+from enum import Enum
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -18,7 +19,9 @@ class UserBase(SQLModel):
     is_active: bool = True
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
-    qr_code_url: str | None = Field(default=None, max_length=500, nullable=True)
+    bank_name: str | None = Field(default=None, max_length=50)
+    account_number: str | None = Field(default=None, max_length=50)
+    account_holder: str | None = Field(default=None, max_length=255)
     avatar_url: str | None = Field(default=None, max_length=500, nullable=True)
 
 
@@ -39,7 +42,9 @@ class UserUpdate(UserBase):
 
 class UserUpdateMe(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
-    email: EmailStr | None = Field(default=None, max_length=255)
+    bank_name: str | None = Field(default=None, max_length=50)
+    account_number: str | None = Field(default=None, max_length=50)
+    account_holder: str | None = Field(default=None, max_length=255)
 
 
 class UpdatePassword(SQLModel):
@@ -89,6 +94,24 @@ class UserPublic(UserBase):
 class UsersPublic(SQLModel):
     data: list[UserPublic]
     count: int
+
+
+# FCM Tokens
+class UserFCMToken(SQLModel, table=True):
+    __tablename__ = "user_fcm_tokens"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True, ondelete="CASCADE")
+    fcm_token: str = Field(index=True)
+    device_type: str | None = Field(default=None, max_length=50)  # e.g., "android", "ios"
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+
+
+class FCMTokenCreate(SQLModel):
+    fcm_token: str
+    device_type: str | None = None
 
 
 # ============ Event Models ============
@@ -201,7 +224,6 @@ class EventMemberPublic(SQLModel):
     joined_at: datetime | None = None
     user_email: str | None = None
     user_full_name: str | None = None
-    user_qr_code_url: str | None = None
 
 
 class AddMemberByEmailRequest(SQLModel):
@@ -322,7 +344,6 @@ class ExpenseSplitPublic(SQLModel):
     amount_owed: int
     user_email: str | None = None
     user_full_name: str | None = None
-    user_qr_code_url: str | None = None
 
 
 class ExpensesPublic(SQLModel):
@@ -336,7 +357,9 @@ class UserBalance(SQLModel):
     user_id: uuid.UUID
     user_email: str
     user_full_name: str | None
-    user_qr_code_url: str | None = None
+    bank_name: str | None = None
+    account_number: str | None = None
+    account_holder: str | None = None
     total_paid: int
     total_owed: int
     net_balance: int  # positive = others owe user, negative = user owes
@@ -397,6 +420,7 @@ class SettlementCreate(SQLModel):
     to_user_id: uuid.UUID
     amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
+    idempotency_key: uuid.UUID
 
 
 class Settlement(SettlementBase, table=True):
@@ -413,6 +437,11 @@ class Settlement(SettlementBase, table=True):
     )
     amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
+    idempotency_key: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        unique=True,
+        index=True,
+    )
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
@@ -444,13 +473,12 @@ class SettlementPublic(SettlementBase):
     from_user_id: uuid.UUID
     to_user_id: uuid.UUID
     note: str | None = None
+    idempotency_key: uuid.UUID
     created_at: datetime | None = None
     from_user_email: str | None = None
     from_user_full_name: str | None = None
-    from_user_qr_code_url: str | None = None
     to_user_email: str | None = None
     to_user_full_name: str | None = None
-    to_user_qr_code_url: str | None = None
 
 
 class SettlementsPublic(SQLModel):
@@ -508,8 +536,7 @@ class SimplifiedDebt(SQLModel):
     from_user_full_name: str | None
     to_user_id: uuid.UUID
     to_user_email: str
-    to_user_full: str | None
-    to_user_qr_code_url: str | None
+    to_user_full_name: str | None
     amount: int
 
 
@@ -528,3 +555,56 @@ class EventStats(SQLModel):
     your_total_paid: int
     your_total_owed: int
     your_net_balance: int
+
+
+# ============ Notification Models ============
+
+class NotificationType(str, Enum):
+    EXPENSE_CREATED = "EXPENSE_CREATED"
+    MEMBER_ADDED = "MEMBER_ADDED"
+    SETTLEMENT_RECORDED = "SETTLEMENT_RECORDED"
+
+
+class NotificationBase(SQLModel):
+    title: str = Field(max_length=255)
+    content: str
+    type: NotificationType
+    event_id: uuid.UUID | None = Field(default=None, foreign_key="events.id")
+    reference_id: uuid.UUID | None = Field(default=None)
+
+
+class Notification(NotificationBase, table=True):
+    __tablename__ = "notifications"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    recipient_id: uuid.UUID = Field(foreign_key="users.id", nullable=False, ondelete="CASCADE")
+    sender_id: uuid.UUID | None = Field(default=None, foreign_key="users.id", ondelete="SET NULL")
+    is_read: bool = Field(default=False)
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),
+    )
+
+    recipient: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Notification.recipient_id]",
+            "primaryjoin": "Notification.recipient_id == User.id",
+        }
+    )
+    sender: Optional["User"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[Notification.sender_id]",
+            "primaryjoin": "Notification.sender_id == User.id",
+        }
+    )
+
+
+class NotificationPublic(NotificationBase):
+    id: uuid.UUID
+    sender_id: uuid.UUID | None
+    is_read: bool
+    created_at: datetime
+
+
+class NotificationsPublic(SQLModel):
+    data: list[NotificationPublic]
+    count: int
