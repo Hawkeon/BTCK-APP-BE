@@ -420,6 +420,7 @@ class SettlementCreate(SQLModel):
     to_user_id: uuid.UUID
     amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
+    idempotency_key: uuid.UUID
 
 
 class Settlement(SettlementBase, table=True):
@@ -436,6 +437,11 @@ class Settlement(SettlementBase, table=True):
     )
     amount: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
+    idempotency_key: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        unique=True,
+        index=True,
+    )
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),
@@ -467,10 +473,13 @@ class SettlementPublic(SettlementBase):
     from_user_id: uuid.UUID
     to_user_id: uuid.UUID
     note: str | None = None
+    idempotency_key: uuid.UUID
     created_at: datetime | None = None
     from_user_email: str | None = None
     from_user_full_name: str | None = None
+    to_user_email: str | None = None
     to_user_full_name: str | None = None
+
 
 
 class SettlementsPublic(SQLModel):
@@ -528,7 +537,8 @@ class SimplifiedDebt(SQLModel):
     from_user_full_name: str | None
     to_user_id: uuid.UUID
     to_user_email: str
-    to_user_full: str | None
+    to_user_full_name: str | None
+
     amount: int
 
 

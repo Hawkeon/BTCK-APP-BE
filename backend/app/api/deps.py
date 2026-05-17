@@ -19,7 +19,10 @@ reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login"
 )
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["5/minute"] if settings.ENVIRONMENT != "local" else [],
+)
 
 
 def get_db() -> Generator[Session, None, None]:

@@ -5,226 +5,235 @@ from sqlmodel import Session, select
 
 from app import crud
 from app.core.config import settings
-from app.models import Event, EventMember, Expense, ExpenseCreate, Settlement, SettlementCreate, User, UserCreate
+from app.models import (
+    Event,
+    EventCreate,
+    ExpenseCreate,
+    ExpenseSplitCreate,
+    Settlement,
+    SettlementCreate,
+    User,
+    UserCreate,
+)
 from tests.utils.utils import random_email, random_lower_string
 
 
-def create_event_with_members(
-    session: Session, owner_id: uuid.UUID, member_ids: list[uuid.UUID]
-) -> Event:
+def _create_user(session: Session) -> tuple[User, str, str]:
+    email = random_email()
+    password = random_lower_string()
+    user = crud.create_user(session=session, user_create=UserCreate(email=email, password=password))
+    return user, email, password
+
+
+def _auth_headers(client: TestClient, email: str, password: str) -> dict[str, str]:
+    r = client.post(f"{settings.API_V1_STR}/auth/login", data={"username": email, "password": password})
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _create_event_with_members(session: Session, owner_id: uuid.UUID, member_ids: list[uuid.UUID]) -> Event:
     event = crud.create_event(
-        session=session,
-        event_in=Event(name="Test Event", description="Test"),
-        owner_id=owner_id,
+        session=session, event_in=EventCreate(name="Test Event", description="Test"), created_by_id=owner_id,
     )
     for mid in member_ids:
         if mid != owner_id:
-            crud.add_member(session=session, event_id=event.id, user_id=mid)
+            crud.add_member_by_user_id(session=session, event_id=event.id, user_id=mid)
     return event
 
 
-def create_expense(
+def _create_expense(
     session: Session,
     event_id: uuid.UUID,
+    created_by_id: uuid.UUID,
     payer_id: uuid.UUID,
-    amount: float,
-    member_ids: list[uuid.UUID],
-) -> Expense:
+    amount: int,
+    splits: list[tuple[uuid.UUID, int]],
+) -> crud.Expense:
     expense_in = ExpenseCreate(
         description="Test expense",
         amount=amount,
-        expense_date=None,
         category="food",
-        split_type="equal",
-        include_user_ids=member_ids,
+        payer_id=payer_id,
+        splits=[ExpenseSplitCreate(user_id=uid, amount_owed=amt) for uid, amt in splits],
     )
     return crud.create_expense(
-        session=session,
-        expense_in=expense_in,
-        event_id=event_id,
-        payer_id=payer_id,
+        session=session, expense_in=expense_in, event_id=event_id, created_by_id=created_by_id,
     )
 
 
-def create_settlement_helper(
-    session: Session,
-    event_id: uuid.UUID,
-    from_user_id: uuid.UUID,
-    to_user_id: uuid.UUID,
-    amount: float,
-) -> Settlement:
-    settlement_in = SettlementCreate(to_user_id=to_user_id, amount=amount)
-    return crud.create_settlement(
-        session=session,
-        settlement_in=settlement_in,
-        event_id=event_id,
-        from_user_id=from_user_id,
-    )
+# ============ Basic CRUD Tests ============
 
 
 def test_create_settlement(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, email2, pw2 = _create_user(db)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user1.id, 100000, [(user2.id, 50000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    create_expense(session=db, event_id=event.id, payer_id=user.id, amount=100.0, member_ids=[user.id, user2.id])
-
-    settlement_data = {"to_user_id": str(user2.id), "amount": 50.0}
+    settlement_data = {
+        "from_user_id": str(user2.id),
+        "to_user_id": str(user1.id),
+        "amount": 40000,
+        "idempotency_key": str(uuid.uuid4()),
+    }
     r = client.post(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/",
-        headers=headers,
+        headers=_auth_headers(client, email2, pw2),
         json=settlement_data,
     )
     assert r.status_code == 200
-    settlement = r.json()
-    assert settlement["amount"] == 50.0
-    assert settlement["from_user_id"] == str(user.id)
-    assert settlement["to_user_id"] == str(user2.id)
+    s = r.json()
+    assert s["amount"] == 40000
+    assert s["from_user_id"] == str(user2.id)
+    assert s["to_user_id"] == str(user1.id)
+    assert "idempotency_key" in s
+
+
+def test_missing_idempotency_key_returns_422(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    user1, email1, pw1 = _create_user(db)
+    user2, _, _ = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
+
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user1.id, 100000, [(user2.id, 50000)])
+
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headers,
+        json={"from_user_id": str(user1.id), "to_user_id": str(user2.id), "amount": 30000},
+    )
+    assert r.status_code == 422
+    errors = r.json()["detail"]
+    assert any(
+        e["loc"] == ["body", "idempotency_key"] and e["type"] == "missing"
+        for e in errors
+    )
+
+    # No settlement created
+    settlements = crud.get_settlements(session=db, event_id=event.id)
+    assert len(settlements) == 0
 
 
 def test_create_settlement_cannot_settle_with_self(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, _, _ = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user1.id, 100000, [(user2.id, 50000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    settlement_data = {"to_user_id": str(user.id), "amount": 50.0}
     r = client.post(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/",
         headers=headers,
-        json=settlement_data,
+        json={"from_user_id": str(user1.id), "to_user_id": str(user1.id), "amount": 50000, "idempotency_key": str(uuid.uuid4())},
     )
     assert r.status_code == 400
     assert r.json()["detail"] == "Cannot settle with yourself"
 
 
+def test_create_settlement_wrong_from_user(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    user1, email1, pw1 = _create_user(db)
+    user2, email2, pw2 = _create_user(db)
+    headers1 = _auth_headers(client, email1, pw1)
+
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user1.id, 100000, [(user2.id, 50000)])
+
+    # user1 tries to send settlement as user2 (wrong from_user_id for auth token)
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headers1,
+        json={"from_user_id": str(user2.id), "to_user_id": str(user1.id), "amount": 50000, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"] == "from_user_id must be current user"
+
+
 def test_create_settlement_recipient_not_member(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, _, _ = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = crud.create_event(session=db, event_in=EventCreate(name="Test", description="Test"), created_by_id=user1.id)
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = crud.create_event(session=db, event_in=Event(name="Test", description="Test"), owner_id=user.id)
-
-    settlement_data = {"to_user_id": str(user2.id), "amount": 50.0}
     r = client.post(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/",
         headers=headers,
-        json=settlement_data,
+        json={"from_user_id": str(user1.id), "to_user_id": str(user2.id), "amount": 50000, "idempotency_key": str(uuid.uuid4())},
     )
     assert r.status_code == 400
-    assert r.json()["detail"] == "Recipient must be an event member"
+    assert r.json()["detail"] == "to_user_id must be an event member"
 
 
 def test_list_settlements(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, _, _ = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user2.id, 100000, [(user2.id, 100000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=25.0)
-    create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=25.0)
-
-    r = client.get(
-        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
-        headers=headers,
+    # Create 2 settlements
+    crud.create_settlement(
+        session=db,
+        settlement_in=SettlementCreate(from_user_id=user2.id, to_user_id=user1.id, amount=40000, idempotency_key=uuid.uuid4()),
+        event_id=event.id,
     )
+    crud.create_settlement(
+        session=db,
+        settlement_in=SettlementCreate(from_user_id=user2.id, to_user_id=user1.id, amount=60000, idempotency_key=uuid.uuid4()),
+        event_id=event.id,
+    )
+
+    r = client.get(f"{settings.API_V1_STR}/events/{event.id}/settlements/", headers=headers)
     assert r.status_code == 200
-    settlements = r.json()
-    assert settlements["count"] == 2
-    assert len(settlements["data"]) == 2
+    result = r.json()
+    assert result["count"] == 2
+    assert len(result["data"]) == 2
 
 
 def test_get_settlement(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, _, _ = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user2.id, 100000, [(user2.id, 100000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    settlement = create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=50.0)
-
-    r = client.get(
-        f"{settings.API_V1_STR}/events/{event.id}/settlements/{settlement.id}",
-        headers=headers,
+    s = crud.create_settlement(
+        session=db,
+        settlement_in=SettlementCreate(from_user_id=user2.id, to_user_id=user1.id, amount=50000, idempotency_key=uuid.uuid4()),
+        event_id=event.id,
     )
+
+    r = client.get(f"{settings.API_V1_STR}/events/{event.id}/settlements/{s.id}", headers=headers)
     assert r.status_code == 200
     result = r.json()
-    assert result["id"] == str(settlement.id)
-    assert result["amount"] == 50.0
+    assert result["id"] == str(s.id)
+    assert result["amount"] == 50000
 
 
 def test_get_settlement_not_found(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    headers = _auth_headers(client, email1, pw1)
 
-    event = crud.create_event(session=db, event_in=Event(name="Test", description="Test"), owner_id=user.id)
-
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    event = crud.create_event(session=db, event_in=EventCreate(name="Test", description="Test"), created_by_id=user1.id)
 
     r = client.get(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/{uuid.uuid4()}",
@@ -237,137 +246,304 @@ def test_get_settlement_not_found(
 def test_delete_settlement(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, email2, pw2 = _create_user(db)
+    headers = _auth_headers(client, email2, pw2)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user2.id, 100000, [(user2.id, 100000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    settlement = create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=50.0)
-
-    r = client.delete(
-        f"{settings.API_V1_STR}/events/{event.id}/settlements/{settlement.id}",
-        headers=headers,
+    s = crud.create_settlement(
+        session=db,
+        settlement_in=SettlementCreate(from_user_id=user2.id, to_user_id=user1.id, amount=50000, idempotency_key=uuid.uuid4()),
+        event_id=event.id,
     )
+
+    settlement_id = s.id
+    r = client.delete(f"{settings.API_V1_STR}/events/{event.id}/settlements/{settlement_id}", headers=headers)
     assert r.status_code == 200
     assert r.json()["message"] == "Settlement deleted successfully"
 
-    db.refresh(settlement)
-    statement = select(Settlement).where(Settlement.id == settlement.id)
+    db.expire_all()
+    statement = select(Settlement).where(Settlement.id == settlement_id)
     assert db.exec(statement).first() is None
 
 
 def test_delete_settlement_only_payer_can_delete(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    user1, email1, pw1 = _create_user(db)
+    user2, email2, pw2 = _create_user(db)
+    headers1 = _auth_headers(client, email1, pw1)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, user1.id, [user1.id, user2.id])
+    _create_expense(db, event.id, user1.id, user2.id, 100000, [(user2.id, 100000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    login_data2 = {"username": user2_email, "password": password2}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data2)
-    token2 = r.json()["access_token"]
-    headers2 = {"Authorization": f"Bearer {token2}"}
-
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    settlement = create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=50.0)
-
-    r = client.delete(
-        f"{settings.API_V1_STR}/events/{event.id}/settlements/{settlement.id}",
-        headers=headers2,
+    s = crud.create_settlement(
+        session=db,
+        settlement_in=SettlementCreate(from_user_id=user2.id, to_user_id=user1.id, amount=50000, idempotency_key=uuid.uuid4()),
+        event_id=event.id,
     )
+
+    # user1 (creditor) tries to delete
+    r = client.delete(f"{settings.API_V1_STR}/events/{event.id}/settlements/{s.id}", headers=headers1)
     assert r.status_code == 403
     assert r.json()["detail"] == "Only the payer can delete this settlement"
 
 
-def test_settlement_affects_balance(
+# ============ Balance Formula Tests ============
+
+
+def test_balance_partial_settlement(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    """A pays 100K, split with B (50K each). B settles 40K to A. Check balances."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    balances_before = crud.calculate_event_balances(session=db, event_id=event.id)
+    balA_before = next(b for b in balances_before.balances if b.user_id == userA.id)
+    balB_before = next(b for b in balances_before.balances if b.user_id == userB.id)
+    assert balA_before.net_balance == 50000  # A paid 100K, owes 50K = +50K
+    assert balB_before.net_balance == -50000  # B owes 50K
 
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
-
-    create_expense(session=db, event_id=event.id, payer_id=user.id, amount=100.0, member_ids=[user.id, user2.id])
-
-    balances_before = crud.calculate_event_balances_with_settlements(session=db, event_id=event.id)
-    user_balance_before = next(b for b in balances_before.balances if b.user_id == user.id)
-    user2_balance_before = next(b for b in balances_before.balances if b.user_id == user2.id)
-
-    assert user_balance_before.net_balance == 50.0
-    assert user2_balance_before.net_balance == -50.0
-
-    settlement_data = {"to_user_id": str(user2.id), "amount": 25.0}
+    # B settles 40K to A
     r = client.post(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/",
-        headers=headers,
-        json=settlement_data,
+        headers=headersB,
+        json={"from_user_id": str(userB.id), "to_user_id": str(userA.id), "amount": 40000, "idempotency_key": str(uuid.uuid4())},
     )
     assert r.status_code == 200
 
-    balances_after = crud.calculate_event_balances_with_settlements(session=db, event_id=event.id)
-    user_balance_after = next(b for b in balances_after.balances if b.user_id == user.id)
-    user2_balance_after = next(b for b in balances_after.balances if b.user_id == user2.id)
+    balances_after = crud.calculate_event_balances(session=db, event_id=event.id)
+    balA_after = next(b for b in balances_after.balances if b.user_id == userA.id)
+    balB_after = next(b for b in balances_after.balances if b.user_id == userB.id)
+    assert balA_after.net_balance == 10000  # 50K - 40K received = 10K
+    assert balB_after.net_balance == -10000  # -50K + 40K paid = -10K
 
-    assert user_balance_after.net_balance == 25.0
-    assert user2_balance_after.net_balance == -25.0
 
-
-def test_get_my_event_balance_with_settlements(
+def test_balance_full_settlement(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
-    user_email = random_email()
-    password = random_lower_string()
-    user = crud.create_user(session=db, user_create=UserCreate(email=user_email, password=password))
+    """A pays 100K, split with B (50K each). B settles full 50K to A."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
 
-    user2_email = random_email()
-    password2 = random_lower_string()
-    user2 = crud.create_user(session=db, user_create=UserCreate(email=user2_email, password=password2))
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
 
-    login_data = {"username": user_email, "password": password}
-    r = client.post(f"{settings.API_V1_STR}/login/access-token", data=login_data)
-    token = r.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={"from_user_id": str(userB.id), "to_user_id": str(userA.id), "amount": 50000, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert r.status_code == 200
 
-    event = create_event_with_members(session=db, owner_id=user.id, member_ids=[user.id, user2.id])
+    balances = crud.calculate_event_balances(session=db, event_id=event.id)
+    balA = next(b for b in balances.balances if b.user_id == userA.id)
+    balB = next(b for b in balances.balances if b.user_id == userB.id)
+    assert balA.net_balance == 0
+    assert balB.net_balance == 0
 
-    create_expense(session=db, event_id=event.id, payer_id=user.id, amount=100.0, member_ids=[user.id, user2.id])
-    create_settlement_helper(session=db, event_id=event.id, from_user_id=user.id, to_user_id=user2.id, amount=25.0)
+
+# ============ Idempotency Tests ============
+
+
+def test_duplicate_idempotency_key(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    """Same idempotency_key sent multiple times = only one settlement, balance correct."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    idem_key = str(uuid.uuid4())
+    payload = {
+        "from_user_id": str(userB.id),
+        "to_user_id": str(userA.id),
+        "amount": 40000,
+        "idempotency_key": idem_key,
+    }
+
+    # Send 10 times with same idempotency_key
+    responses = [
+        client.post(
+            f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+            headers=headersB,
+            json=payload,
+        )
+        for _ in range(10)
+    ]
+
+    # All should return 200
+    for i, r in enumerate(responses):
+        assert r.status_code == 200, f"Request {i} failed: {r.json()}"
+
+    # All should return the same settlement id
+    settlement_ids = {r.json()["id"] for r in responses}
+    assert len(settlement_ids) == 1
+
+    # Only one row in DB
+    settlements_in_db = crud.get_settlements(session=db, event_id=event.id)
+    assert len(settlements_in_db) == 1
+
+    # Balance reduced only once
+    balances = crud.calculate_event_balances(session=db, event_id=event.id)
+    balA = next(b for b in balances.balances if b.user_id == userA.id)
+    balB = next(b for b in balances.balances if b.user_id == userB.id)
+    assert balA.net_balance == 10000  # 50K - 40K = 10K
+    assert balB.net_balance == -10000  # -50K + 40K = -10K
+
+
+def test_idempotency_key_unique_across_payloads(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    """Different payloads with different idempotency_key each create a settlement."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    r1 = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={
+            "from_user_id": str(userB.id),
+            "to_user_id": str(userA.id),
+            "amount": 20000,
+            "idempotency_key": str(uuid.uuid4()),
+        },
+    )
+    assert r1.status_code == 200
+
+    r2 = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={
+            "from_user_id": str(userB.id),
+            "to_user_id": str(userA.id),
+            "amount": 20000,
+            "idempotency_key": str(uuid.uuid4()),
+        },
+    )
+    assert r2.status_code == 200
+    assert r1.json()["id"] != r2.json()["id"]
+
+    settlements_in_db = crud.get_settlements(session=db, event_id=event.id)
+    assert len(settlements_in_db) == 2
+
+    balances = crud.calculate_event_balances(session=db, event_id=event.id)
+    balB = next(b for b in balances.balances if b.user_id == userB.id)
+    assert balB.net_balance == -10000  # -50K + 20K + 20K = -10K
+
+
+# ============ Amount Validation Tests ============
+
+
+def test_over_settlement_rejected(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    """B owes A 50K but tries to settle 60K. Rejected."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={"from_user_id": str(userB.id), "to_user_id": str(userA.id), "amount": 60000, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert r.status_code == 400
+    assert "exceeds remaining debt" in r.json()["detail"]
+
+    # No settlement created
+    settlements = crud.get_settlements(session=db, event_id=event.id)
+    assert len(settlements) == 0
+
+    # Balance unchanged
+    balances = crud.calculate_event_balances(session=db, event_id=event.id)
+    balB = next(b for b in balances.balances if b.user_id == userB.id)
+    assert balB.net_balance == -50000
+
+
+def test_wrong_direction_rejected(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    """A is creditor. A tries settlement A -> B. Rejected because A does not owe B."""
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersA = _auth_headers(client, emailA, pwA)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    # A tries to settle to B (wrong direction — A doesn't owe B)
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersA,
+        json={"from_user_id": str(userA.id), "to_user_id": str(userB.id), "amount": 10000, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert r.status_code == 400
+    assert "No debt owed" in r.json()["detail"]
+
+    # No settlement created
+    settlements = crud.get_settlements(session=db, event_id=event.id)
+    assert len(settlements) == 0
+
+
+def test_settlement_amount_zero_rejected(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    r = client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={"from_user_id": str(userB.id), "to_user_id": str(userA.id), "amount": 0, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert r.status_code == 422  # Pydantic validation error
+
+
+def test_my_balance_endpoint_with_settlements(
+    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
+) -> None:
+    userA, emailA, pwA = _create_user(db)
+    userB, emailB, pwB = _create_user(db)
+    headersB = _auth_headers(client, emailB, pwB)
+
+    event = _create_event_with_members(db, userA.id, [userA.id, userB.id])
+    _create_expense(db, event.id, userA.id, userA.id, 100000, [(userA.id, 50000), (userB.id, 50000)])
+
+    # B settles 25K to A
+    client.post(
+        f"{settings.API_V1_STR}/events/{event.id}/settlements/",
+        headers=headersB,
+        json={"from_user_id": str(userB.id), "to_user_id": str(userA.id), "amount": 25000, "idempotency_key": str(uuid.uuid4())},
+    )
 
     r = client.get(
         f"{settings.API_V1_STR}/events/{event.id}/settlements/my/balances",
-        headers=headers,
+        headers=headersB,
     )
     assert r.status_code == 200
     balances = r.json()
-    user_balance = next(b for b in balances["balances"] if b["user_id"] == str(user.id))
-    assert user_balance["net_balance"] == 25.0
+    userB_balance = next(b for b in balances["balances"] if b["user_id"] == str(userB.id))
+    assert userB_balance["net_balance"] == -25000  # -50K + 25K = -25K
