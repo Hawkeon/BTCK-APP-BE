@@ -481,6 +481,7 @@ class SettlementPublic(SettlementBase):
     to_user_full_name: str | None = None
 
 
+
 class SettlementsPublic(SQLModel):
     data: list[SettlementPublic]
     count: int
@@ -537,6 +538,7 @@ class SimplifiedDebt(SQLModel):
     to_user_id: uuid.UUID
     to_user_email: str
     to_user_full_name: str | None
+
     amount: int
 
 

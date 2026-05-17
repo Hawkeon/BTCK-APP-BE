@@ -12,6 +12,7 @@ from app.models import (
     ExpensesPublic,
     ExpenseUpdate,
     Message,
+    NotificationType,
 )
 
 router = APIRouter(prefix="/events/{event_id}/expenses", tags=["expenses"])
@@ -25,7 +26,6 @@ def expense_to_public(expense, _session: SessionDep) -> ExpensePublic:
             amount_owed=s.amount_owed,
             user_email=s.user.email if s.user else None,
             user_full_name=s.user.full_name if s.user else None,
-            user_qr_code_url=s.user.qr_code_url if s.user else None,
         )
         for s in expense.splits
     ]
@@ -100,6 +100,23 @@ def create_expense(
         event_id=event_id,
         created_by_id=current_user.id,
     )
+
+    # Send notifications to other members
+    members = crud.get_event_members(session=session, event_id=event_id)
+    event = session.get(crud.Event, event_id)
+    for member in members:
+        if member.user_id != current_user.id:
+            crud.create_notification(
+                session=session,
+                recipient_id=member.user_id,
+                sender_id=current_user.id,
+                event_id=event_id,
+                title="Khoản chi mới",
+                content=f"{current_user.full_name or current_user.email} đã thêm khoản chi '{expense.description}' {expense.amount:,}đ trong nhóm '{event.name if event else ''}'",
+                type=NotificationType.EXPENSE_CREATED,
+                reference_id=expense.id
+            )
+
     return expense_to_public(expense, session)
 
 
@@ -171,22 +188,18 @@ async def upload_expense_image(
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Invalid file type. Allowed: JPEG, PNG, GIF, WebP")
 
-    # Create uploads directory if not exists
-    upload_dir = "/app/uploads/expense_images"
-    os.makedirs(upload_dir, exist_ok=True)
-
-    # Generate unique filename
-    file_ext = file.filename.split(".")[-1] if file.filename else "png"
-    filename = f"{expense_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
-    file_path = os.path.join(upload_dir, filename)
-
-    # Save file
+    # Read file content
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    # Upload to storage (S3/MinIO or local)
+    from app.services.storage import storage_service
+    image_url = await storage_service.upload_image(
+        content, 
+        file.filename or f"expense_{expense_id}.png", 
+        "expense_images"
+    )
 
     # Update expense image_url
-    image_url = f"/uploads/expense_images/{filename}"
     expense.image_url = image_url
     session.add(expense)
     session.commit()

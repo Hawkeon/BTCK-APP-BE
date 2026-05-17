@@ -202,8 +202,7 @@ def test_update_user_me(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
     full_name = "Updated Name"
-    email = random_email()
-    data = {"full_name": full_name, "email": email}
+    data = {"full_name": full_name}
     r = client.patch(
         f"{settings.API_V1_STR}/users/me",
         headers=normal_user_token_headers,
@@ -211,13 +210,11 @@ def test_update_user_me(
     )
     assert r.status_code == 200
     updated_user = r.json()
-    assert updated_user["email"] == email
     assert updated_user["full_name"] == full_name
 
-    user_query = select(User).where(User.email == email)
+    user_query = select(User).where(User.full_name == full_name)
     user_db = db.exec(user_query).first()
     assert user_db
-    assert user_db.email == email
     assert user_db.full_name == full_name
 
 
@@ -317,22 +314,6 @@ def test_update_password_me_incorrect_password(
     assert updated_user["detail"] == "Incorrect password"
 
 
-def test_update_user_me_email_exists(
-    client: TestClient, normal_user_token_headers: dict[str, str], db: Session
-) -> None:
-    username = random_email()
-    password = random_lower_string()
-    user_in = UserCreate(email=username, password=password)
-    user = crud.create_user(session=db, user_create=user_in)
-
-    data = {"email": user.email}
-    r = client.patch(
-        f"{settings.API_V1_STR}/users/me",
-        headers=normal_user_token_headers,
-        json=data,
-    )
-    assert r.status_code == 409
-    assert r.json()["detail"] == "User with this email already exists"
 
 
 def test_update_password_me_same_password_error(

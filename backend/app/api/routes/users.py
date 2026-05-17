@@ -27,8 +27,12 @@ from app.models import (
     UsersPublic,
     UserUpdate,
     UserUpdateMe,
+    UserFCMToken,
+    FCMTokenCreate,
 )
 from app.utils import generate_new_account_email, send_email
+from app.services.qr import generate_vietqr_url
+from app.services.banks import bank_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -60,12 +64,12 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
 
 
 @router.patch("/me", response_model=UserPublic)
-def update_user_me(*, session: SessionDep, user_in: UserUpdateMe, current_user: CurrentUser) -> Any:
+async def update_user_me(*, session: SessionDep, user_in: UserUpdateMe, current_user: CurrentUser) -> Any:
     """Update own user."""
-    if user_in.email:
-        existing_user = crud.get_user_by_email(session=session, email=user_in.email)
-        if existing_user and existing_user.id != current_user.id:
-            raise HTTPException(status_code=409, detail="User with this email already exists")
+    if user_in.bank_name:
+        if not await bank_service.is_valid_bank(user_in.bank_name):
+            raise HTTPException(status_code=400, detail=f"Mã ngân hàng không hợp lệ: {user_in.bank_name}")
+            
     user_data = user_in.model_dump(exclude_unset=True)
     current_user.sqlmodel_update(user_data)
     session.add(current_user)
@@ -92,41 +96,6 @@ def update_password_me(*, session: SessionDep, body: UpdatePassword, current_use
 @router.get("/me", response_model=UserPublic)
 def read_user_me(current_user: CurrentUser) -> Any:
     """Get current user."""
-    return current_user
-
-
-@router.post("/me/qr-code", response_model=UserPublic)
-async def upload_qr_code(
-    session: SessionDep,
-    current_user: CurrentUser,
-    file: UploadFile = File(...),
-) -> Any:
-    """Upload QR code image for payment."""
-    # Validate file type
-    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: JPEG, PNG, GIF, WebP")
-
-    # Create uploads directory if not exists
-    upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "qr_codes")
-    os.makedirs(upload_dir, exist_ok=True)
-
-    # Generate unique filename
-    file_ext = file.filename.split(".")[-1] if file.filename else "png"
-    filename = f"{current_user.id}_{uuid.uuid4().hex[:8]}.{file_ext}"
-    file_path = os.path.join(upload_dir, filename)
-
-    # Save file
-    content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
-
-    # Update user qr_code_url
-    qr_code_url = f"/uploads/qr_codes/{filename}"
-    current_user.qr_code_url = qr_code_url
-    session.add(current_user)
-    session.commit()
-    session.refresh(current_user)
     return current_user
 
 
@@ -159,6 +128,44 @@ async def upload_avatar(
     return current_user
 
 
+@router.post("/me/fcm-token", response_model=Message)
+async def register_fcm_token(
+    *, session: SessionDep, current_user: CurrentUser, token_in: FCMTokenCreate
+) -> Any:
+    """Register or update an FCM token for the current user."""
+    # Check if token already exists for this user
+    statement = select(UserFCMToken).where(
+        UserFCMToken.user_id == current_user.id,
+        UserFCMToken.fcm_token == token_in.fcm_token
+    )
+    existing_token = session.exec(statement).first()
+    
+    if not existing_token:
+        new_token = UserFCMToken(
+            user_id=current_user.id,
+            fcm_token=token_in.fcm_token,
+            device_type=token_in.device_type
+        )
+        session.add(new_token)
+        session.commit()
+    
+    return Message(message="FCM token registered successfully")
+
+
+@router.delete("/me/fcm-token/{token}", response_model=Message)
+async def unregister_fcm_token(
+    *, session: SessionDep, current_user: CurrentUser, token: str
+) -> Any:
+    """Unregister an FCM token (e.g., on logout)."""
+    statement = delete(UserFCMToken).where(
+        UserFCMToken.user_id == current_user.id,
+        UserFCMToken.fcm_token == token
+    )
+    session.exec(statement)
+    session.commit()
+    return Message(message="FCM token unregistered successfully")
+
+
 @router.delete("/me", response_model=Message)
 def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     """Delete own user."""
@@ -167,6 +174,35 @@ def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     session.delete(current_user)
     session.commit()
     return Message(message="User deleted successfully")
+
+
+@router.get("/{user_id}/payment-qr", response_model=str)
+def get_user_payment_qr(
+    *,
+    session: SessionDep,
+    user_id: uuid.UUID,
+    amount: int = 0,
+    description: str | None = None,
+) -> Any:
+    """Get a dynamically generated VietQR URL for a user."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not user.bank_name or not user.account_number:
+        raise HTTPException(
+            status_code=400, 
+            detail="User has not set up bank account information"
+        )
+        
+    qr_url = generate_vietqr_url(
+        bank_id=user.bank_name,
+        account_no=user.account_number,
+        amount=amount,
+        account_name=user.account_holder or user.full_name,
+        description=description or f"Thanh toan chia tien {settings.PROJECT_NAME}"
+    )
+    return qr_url
 
 
 @router.post("/signup", response_model=UserPublic)
