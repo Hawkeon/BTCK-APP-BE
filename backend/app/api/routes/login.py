@@ -48,7 +48,7 @@ def register_user(request: Request, session: SessionDep, user_in: UserRegister) 
 
 
 @router.post("/login", response_model=Token)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute" if settings.ENVIRONMENT != "local" else "1000/minute")
 def login(
     request: Request, session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Token:

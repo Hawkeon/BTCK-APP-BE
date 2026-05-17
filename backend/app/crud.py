@@ -311,7 +311,7 @@ def calculate_event_balances(*, session: Session, event_id: uuid.UUID) -> EventB
         user = users.get(uid)
         if user:
             net_before_settlements = paid.get(uid, 0) - owed.get(uid, 0)
-            net_from_settlements = settled_to.get(uid, 0) - settled_from.get(uid, 0)
+            net_from_settlements = settled_from.get(uid, 0) - settled_to.get(uid, 0)
             net_balance = net_before_settlements + net_from_settlements
 
             balances.append(UserBalance(
@@ -371,11 +371,21 @@ def create_settlement(
         to_user_id=settlement_in.to_user_id,
         amount=settlement_in.amount,
         note=settlement_in.note,
+        idempotency_key=settlement_in.idempotency_key,
     )
     session.add(db_obj)
     session.commit()
     session.refresh(db_obj)
     return db_obj
+
+
+def get_settlement_by_idempotency_key(
+    *, session: Session, idempotency_key: uuid.UUID
+) -> Settlement | None:
+    statement = select(Settlement).where(
+        Settlement.idempotency_key == idempotency_key
+    )
+    return session.exec(statement).first()
 
 
 def get_settlements(
@@ -507,6 +517,7 @@ def simplify_event_debts(*, session: Session, event_id: uuid.UUID) -> Simplified
                     from_user_full_name=debtor.user_full_name,
                     to_user_id=creditor_id,
                     to_user_email=creditor.user_email,
+                    to_user_full_name=creditor.user_full_name,
                     amount=settle_amount
                 ))
 
