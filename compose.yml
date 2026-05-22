@@ -63,6 +63,7 @@ services:
       - S3_ENDPOINT_URL=${MINIO_ENDPOINT:-http://minio:9000}
       - S3_PUBLIC_URL=${S3_PUBLIC_URL}
       - S3_REGION=us-east-1
+      - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-/app/serviceAccountKey.json}
     # Startup: run migrations, seed data, then start server
     command: >
       sh -c "
