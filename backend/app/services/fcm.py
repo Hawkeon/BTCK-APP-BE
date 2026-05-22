@@ -48,9 +48,8 @@ class FCMService:
                 ),
             ),
         )
-        
         try:
-            response = messaging.send_multicast(message)
+            response = messaging.send_each_for_multicast(message)
             print(f"Successfully sent {response.success_count} messages")
             if response.failure_count > 0:
                 print(f"Failed to send {response.failure_count} messages")
