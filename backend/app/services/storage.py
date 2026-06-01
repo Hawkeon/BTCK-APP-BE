@@ -91,7 +91,8 @@ class StorageService:
         return False
 
     def _extract_s3_key(self, url: str) -> Optional[str]:
-        """Extract S3 key from URL."""
+        """Extract S3 key from URL (supports both internal and public endpoints)."""
+        # Try internal endpoint first
         endpoint = settings.effective_s3_endpoint
         if endpoint and endpoint in url:
             path = url.split(endpoint, 1)[1].lstrip("/")
@@ -99,9 +100,22 @@ class StorageService:
             if path.startswith(bucket_prefix):
                 return path.removeprefix(bucket_prefix)
             return path
+        # Try public endpoint
+        public_endpoint = settings.effective_s3_public_url
+        if public_endpoint and public_endpoint != endpoint and public_endpoint in url:
+            path = url.split(public_endpoint, 1)[1].lstrip("/")
+            bucket_prefix = f"{self.bucket}/"
+            if path.startswith(bucket_prefix):
+                return path.removeprefix(bucket_prefix)
+            return path
         if f"{self.bucket}.s3" in url:
             parsed_url = urlparse(url)
             return parsed_url.path.lstrip("/") or None
+        # Fallback: extract by bucket name from URL path
+        parsed = urlparse(url)
+        bucket_prefix = f"/{self.bucket}/"
+        if bucket_prefix in parsed.path:
+            return parsed.path.split(bucket_prefix, 1)[1]
         return None
 
     def _ensure_bucket_exists(self) -> None:
