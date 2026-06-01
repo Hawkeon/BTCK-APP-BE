@@ -113,11 +113,41 @@ def create_event(*, session: Session, event_in: EventCreate, created_by_id: uuid
     return db_obj
 
 
-def get_events(*, session: Session, user_id: uuid.UUID, skip: int = 0, limit: int = 100) -> list[Event]:
+def get_events(
+    *,
+    session: Session,
+    user_id: uuid.UUID,
+    skip: int = 0,
+    limit: int = 100,
+    q: str | None = None,
+    name: str | None = None,
+    created_from: date | None = None,
+    created_to: date | None = None,
+) -> list[Event]:
     statement = (
         select(Event)
         .join(EventMember, Event.id == EventMember.event_id)
         .where(EventMember.user_id == user_id)
+    )
+
+    if q:
+        statement = statement.where(
+            Event.name.ilike(f"%{q}%")
+        )
+
+    if name:
+        statement = statement.where(
+            Event.name.ilike(f"%{name}%")
+        )
+
+    if created_from:
+        statement = statement.where(Event.created_at >= created_from)
+
+    if created_to:
+        statement = statement.where(Event.created_at <= created_to)
+
+    statement = (
+        statement
         .offset(skip)
         .limit(limit)
         .options(selectinload(Event.members), selectinload(Event.expenses))
@@ -250,10 +280,54 @@ def create_expense(*, session: Session, expense_in: ExpenseCreate, event_id: uui
     return db_obj
 
 
-def get_expenses(*, session: Session, event_id: uuid.UUID, skip: int = 0, limit: int = 100) -> list[Expense]:
+def get_expenses(
+    *,
+    session: Session,
+    event_id: uuid.UUID,
+    skip: int = 0,
+    limit: int = 100,
+    q: str | None = None,
+    description: str | None = None,
+    category: str | None = None,
+    payer_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    amount_min: int | None = None,
+    amount_max: int | None = None,
+) -> list[Expense]:
     statement = (
         select(Expense)
         .where(Expense.event_id == event_id)
+    )
+
+    if q:
+        statement = statement.where(
+            (Expense.description.ilike(f"%{q}%")) | (Expense.category.ilike(f"%{q}%"))
+        )
+
+    if description:
+        statement = statement.where(Expense.description.ilike(f"%{description}%"))
+
+    if category:
+        statement = statement.where(Expense.category == category)
+
+    if payer_id:
+        statement = statement.where(Expense.payer_id == payer_id)
+
+    if date_from:
+        statement = statement.where(Expense.expense_date >= date_from)
+
+    if date_to:
+        statement = statement.where(Expense.expense_date <= date_to)
+
+    if amount_min is not None:
+        statement = statement.where(Expense.amount >= amount_min)
+
+    if amount_max is not None:
+        statement = statement.where(Expense.amount <= amount_max)
+
+    statement = (
+        statement
         .offset(skip)
         .limit(limit)
         .order_by(desc(Expense.expense_date), desc(Expense.created_at))

@@ -1,7 +1,8 @@
 import os
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app import crud
 from app.api.deps import CurrentUser, SessionDep
@@ -58,10 +59,36 @@ def list_expenses(
     session: SessionDep,
     current_user: CurrentUser,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=100),
+    q: str | None = None,
+    description: str | None = None,
+    category: str | None = None,
+    payer_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    amount_min: int | None = Query(default=None, ge=0),
+    amount_max: int | None = Query(default=None, ge=0),
 ) -> ExpensesPublic:
     check_event_access(event_id, session, current_user)
-    expenses = crud.get_expenses(session=session, event_id=event_id, skip=skip, limit=limit)
+
+    # Validate: amount_min must not exceed amount_max
+    if amount_min is not None and amount_max is not None and amount_min > amount_max:
+        raise HTTPException(status_code=400, detail="amount_min cannot be greater than amount_max")
+
+    expenses = crud.get_expenses(
+        session=session,
+        event_id=event_id,
+        skip=skip,
+        limit=limit,
+        q=q,
+        description=description,
+        category=category,
+        payer_id=payer_id,
+        date_from=date_from,
+        date_to=date_to,
+        amount_min=amount_min,
+        amount_max=amount_max,
+    )
     expense_list = [expense_to_public(e, session) for e in expenses]
     return ExpensesPublic(data=expense_list, count=len(expense_list))
 
