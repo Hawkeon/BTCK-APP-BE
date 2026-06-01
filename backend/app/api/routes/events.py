@@ -1,6 +1,7 @@
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app import crud
 from app.api.deps import CurrentUser, SessionDep
@@ -41,9 +42,22 @@ def list_events(
     session: SessionDep,
     current_user: CurrentUser,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=100),
+    q: str | None = None,
+    name: str | None = None,
+    created_from: date | None = None,
+    created_to: date | None = None,
 ) -> EventsPublic:
-    events = crud.get_events(session=session, user_id=current_user.id, skip=skip, limit=limit)
+    events = crud.get_events(
+        session=session,
+        user_id=current_user.id,
+        skip=skip,
+        limit=limit,
+        q=q,
+        name=name,
+        created_from=created_from,
+        created_to=created_to,
+    )
     event_list = [event_to_public(e, session) for e in events]
     return EventsPublic(data=event_list, count=len(event_list))
 
@@ -162,9 +176,30 @@ def remove_member(
         raise HTTPException(status_code=403, detail="Only creator can remove members")
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot remove yourself")
-    success = crud.remove_member(session=session, event_id=event_id, user_id=user_id)
-    if not success:
+
+    # Check if target is event creator/owner
+    if event.created_by_id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot remove the event creator")
+
+    # Validate target user is a member
+    if not crud.is_event_member(session=session, event_id=event_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="Member not found")
+
+    # Validate no outstanding balance
+    balances = crud.calculate_event_balances(session=session, event_id=event_id)
+    target_balance = None
+    for bal in balances.balances:
+        if bal.user_id == user_id:
+            target_balance = bal.net_balance
+            break
+
+    if target_balance is not None and target_balance != 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove member with outstanding balance",
+        )
+
+    crud.remove_member(session=session, event_id=event_id, user_id=user_id)
     return Message(message="Member removed successfully")
 
 
